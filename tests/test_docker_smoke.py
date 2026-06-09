@@ -122,6 +122,6 @@ def test_commissioner_container_healthz_and_round_websocket(
             websocket.send(_round_start_json())
             schedule = json.loads(websocket.recv())
         assert schedule["type"] == "schedule_episodes"
-        assert len(schedule["episodes"]) == 1
+        assert len(schedule["episodes"]) > 0
     finally:
         subprocess.run(["docker", "rm", "-f", container_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

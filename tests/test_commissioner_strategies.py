@@ -10,6 +10,7 @@ from commissioners.common.models import PolicyMembershipEventChange
 from commissioners.common.protocol import (
     DescribeDivisionRequest,
     DivisionInfo,
+    EpisodeFailed as ProtocolEpisodeFailed,
     EpisodeRequest as ProtocolEpisodeRequest,
     EpisodeResult as ProtocolEpisodeResult,
     EpisodeScore,
@@ -29,7 +30,6 @@ from commissioners.common.protocol import (
 from commissioners.common.commissioners import (
     MEAN_ROUND_SCORE_KIND,
     MEAN_SCORE_EWMA_SCORING_MECHANICS,
-    COMPLETED_EPISODE_COUNT_METADATA_KEY,
     BaselineCommissioner,
     RulesetStrategyCommissioner,
     EpisodeResult,
@@ -533,6 +533,7 @@ def test_ruleset_strategy_among_them_config_scheduled_qualifier_without_scores_f
                 policy_version_ids=[policy_version_id] * 8,
             )
         ],
+        failed_episodes=[ProtocolEpisodeFailed(request_id="0", error="container exited")],
     )
 
     assert len(complete.policy_membership_events) == 1
@@ -544,7 +545,14 @@ def test_ruleset_strategy_among_them_config_scheduled_qualifier_without_scores_f
     assert event.reason == "Failed crash test"
     assert event.evidence[0].metadata["transition_id"] == "failed_crash_check"
     assert event.evidence[0].metadata["criteria"] == {"completed_episodes_lte": 0}
-    assert event.evidence[0].metadata["observed"]["completed_episodes"] == 0
+    assert event.evidence[0].metadata["observed"] == {
+        "completed_episodes": 0,
+        "failed_episodes": 1,
+        "scheduled_episodes": 1,
+        "score": 0.0,
+    }
+    assert event.evidence[0].metadata["failed_request_ids"] == ["0"]
+    assert event.evidence[0].metadata["failure_error_samples"] == ["container exited"]
 
 
 def test_ruleset_strategy_among_them_score_gate_ignores_unscheduled_crash_check_member() -> None:

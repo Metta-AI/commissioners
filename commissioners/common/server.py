@@ -60,6 +60,7 @@ def create_app(commissioner: Commissioner) -> FastAPI:
                                 round_start,
                                 [],
                                 schedule.episodes,
+                                [],
                             ).to_json()
                         )
                     continue
@@ -139,6 +140,7 @@ def create_app(commissioner: Commissioner) -> FastAPI:
                             round_start,
                             ordered_results,
                             schedule.episodes if schedule is not None else None,
+                            list(failed_by_request_id.values()),
                         ).to_json()
                     )
         except WebSocketDisconnect:
