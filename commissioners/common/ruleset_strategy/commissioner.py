@@ -71,6 +71,7 @@ class RulesetStrategyCommissioner(BaselineCommissioner):
         else:
             self._ruleset_config = RulesetStrategyCommissionerConfig.from_mapping(config)
         self._completed_stage_ids: dict[tuple[UUID, UUID], set[str]] = {}
+        self._failed_stage_ids: dict[tuple[UUID, UUID], set[str]] = {}
         self._successful_stage_changes: dict[tuple[UUID, UUID], dict[str, PolicyMembershipEventChange]] = {}
 
     def _config(self) -> RulesetStrategyCommissionerConfig:
@@ -214,6 +215,9 @@ class RulesetStrategyCommissioner(BaselineCommissioner):
                 continue
             if membership.policy_version_id not in scheduled_episode.policy_version_ids:
                 continue
+            membership_stage_key = (view.round_start.round_id, membership.id)
+            if self._failed_stage_ids.get(membership_stage_key):
+                continue
             if request.episode_result is not None and membership.policy_version_id not in score_by_policy:
                 continue
 
@@ -236,6 +240,7 @@ class RulesetStrategyCommissioner(BaselineCommissioner):
             if change is None:
                 continue
             if change.status == "disqualified":
+                self._failed_stage_ids.setdefault(membership_stage_key, set()).add(stage.id)
                 event_changes.append(
                     change.model_copy(
                         update={
@@ -469,7 +474,11 @@ class RulesetStrategyCommissioner(BaselineCommissioner):
     ) -> str:
         labels_by_id = {stage.id: stage.schedule.label for stage in stages}
         completed = [labels_by_id[stage.id] for stage in stages if stage.id in completed_stage_ids]
-        pending = [labels_by_id[stage.id] for stage in stages if stage.id not in completed_stage_ids]
+        pending = [
+            labels_by_id[stage.id]
+            for stage in stages
+            if stage.id not in completed_stage_ids and stage.id != failed_stage_id
+        ]
         parts = [f"Completed stages: {', '.join(completed) if completed else 'none'}."]
         if pending:
             parts.append(f"Pending stages: {', '.join(pending)}.")
