@@ -591,7 +591,7 @@ def test_ruleset_strategy_among_them_config_targets_daily_competition_division()
             failed_episodes=[],
         )
     )
-    assert score_response.policy_membership_events[0].substatus == "1/2 stages complete"
+    assert score_response.policy_membership_events[0].substatus == "1/2 stages completed"
     assert "Completed stages: Score gate." in score_response.policy_membership_events[0].notes
     crash_result = ProtocolEpisodeResult(
         request_id=episodes_by_stage["crash_check"].request_id,
@@ -669,7 +669,7 @@ def test_ruleset_strategy_among_them_config_first_qualifier_stage_advances_to_sc
     events = {event.league_policy_membership_id: event for event in passed_response.policy_membership_events}
     assert events[membership_ids[0]].to_division_id == qualifier_id
     assert events[membership_ids[0]].status == "qualifying"
-    assert events[membership_ids[0]].substatus == "1/2 stages complete"
+    assert events[membership_ids[0]].substatus == "1/2 stages completed"
     assert events[membership_ids[0]].evidence[0].metadata["completed_stage_ids"] == ["crash_check"]
     assert "Completed stages: Crash check." in events[membership_ids[0]].notes
     assert membership_ids[1] not in events
@@ -928,7 +928,7 @@ def test_ruleset_strategy_among_them_score_gate_ignores_unscheduled_crash_check_
     assert crash_check_membership_id not in events
     assert events[score_gate_membership_id].to_division_id == qualifier_id
     assert events[score_gate_membership_id].status == "qualifying"
-    assert events[score_gate_membership_id].substatus == "1/2 stages complete"
+    assert events[score_gate_membership_id].substatus == "1/2 stages completed"
 
 
 def test_ruleset_strategy_among_them_config_prioritizes_later_qualifier_stage_when_mixed() -> None:

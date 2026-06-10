@@ -447,7 +447,7 @@ class RulesetStrategyCommissioner(BaselineCommissioner):
             from_division_id=membership.division_id,
             to_division_id=membership.division_id,
             status="qualifying",
-            substatus=f"{len(completed_stage_ids)}/{len(stages)} stages complete",
+            substatus=f"{len(completed_stage_ids)}/{len(stages)} stages completed",
             reason=f"completed qualifier stage {stage.schedule.label}",
             notes=notes,
             evidence=[self._stage_progress_evidence(stages=stages, completed_stage_ids=completed_stage_ids)],
@@ -495,7 +495,7 @@ class RulesetStrategyCommissioner(BaselineCommissioner):
         return PolicyMembershipEventEvidence(
             type="ruleset_stage_progress",
             title="Qualifier stage progress",
-            summary=f"{len(completed_stage_ids)}/{len(stages)} qualifier stages complete",
+            summary=f"{len(completed_stage_ids)}/{len(stages)} qualifier stages completedd",
             metadata={
                 "completed_stage_ids": [stage.id for stage in stages if stage.id in completed_stage_ids],
                 "pending_stage_ids": [stage.id for stage in stages if stage.id not in completed_stage_ids],

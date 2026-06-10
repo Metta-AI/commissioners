@@ -339,7 +339,7 @@ def test_ruleset_strategy_round_websocket_reports_parallel_qualifier_stage_progr
         first_event = first_response["policy_membership_events"][0]
         assert first_response["type"] == "episode_completed_response"
         assert first_event["status"] == "qualifying"
-        assert first_event["substatus"] == "1/2 stages complete"
+        assert first_event["substatus"] == "1/2 stages completed"
         assert "Completed stages: Score gate." in first_event["notes"]
         assert "Pending stages: Crash check." in first_event["notes"]
 
@@ -408,7 +408,7 @@ def test_protocol_accepts_prefixed_round_public_id_and_episode_completed_respons
                 {
                     "league_policy_membership_id": str(membership_id),
                     "status": "qualifying",
-                    "substatus": "1/2 stages complete",
+                    "substatus": "1/2 stages completed",
                     "reason": "completed qualifier stage Score gate",
                 }
             ],
@@ -419,4 +419,4 @@ def test_protocol_accepts_prefixed_round_public_id_and_episode_completed_respons
     assert isinstance(parsed, EpisodeCompletedResponse)
     assert isinstance(parsed.episodes[0], EpisodeRequest)
     assert parsed.policy_membership_events[0].league_policy_membership_id == membership_id
-    assert parsed.policy_membership_events[0].substatus == "1/2 stages complete"
+    assert parsed.policy_membership_events[0].substatus == "1/2 stages completed"
