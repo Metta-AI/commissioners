@@ -5,7 +5,7 @@ from secrets import randbelow
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 _STATE_MAX_BYTES = 10 * 1024 * 1024
 EPISODE_SEED_MAX = 2**31 - 1
@@ -112,6 +112,8 @@ class PolicyMembershipEventEvidence(BaseModel):
 
 
 class PolicyMembershipEventChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     league_policy_membership_id: UUID
     from_division_id: UUID | None = None
     to_division_id: UUID | None = None
