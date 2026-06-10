@@ -13,6 +13,7 @@ from commissioners.common.models import (
     EpisodeResult,
     OnRoundCompletedContext,
     OnRoundCompletedResult,
+    MembershipSnapshot,
     PolicyMembershipEventChange,
     PolicyMembershipEventEvidence,
     PolicyPool,
@@ -71,7 +72,7 @@ class RulesetStrategyCommissioner(BaselineCommissioner):
         else:
             self._ruleset_config = RulesetStrategyCommissionerConfig.from_mapping(config)
         self._completed_stage_ids: dict[tuple[UUID, UUID], set[str]] = {}
-        self._failed_stage_ids: dict[tuple[UUID, UUID], set[str]] = {}
+        self._effective_memberships: dict[tuple[UUID, UUID], MembershipSnapshot] = {}
         self._successful_stage_changes: dict[tuple[UUID, UUID], dict[str, PolicyMembershipEventChange]] = {}
 
     def _config(self) -> RulesetStrategyCommissionerConfig:
@@ -211,18 +212,16 @@ class RulesetStrategyCommissioner(BaselineCommissioner):
         score_by_policy = self._episode_score_by_policy(request.episode_result)
         event_changes: list[PolicyMembershipEventChange] = []
         for membership in view.memberships:
-            if membership.division_id != view.current_division.id:
+            effective_membership = self._effective_membership(view.round_start.round_id, membership)
+            if effective_membership.division_id != view.current_division.id:
                 continue
-            if membership.policy_version_id not in scheduled_episode.policy_version_ids:
+            if effective_membership.policy_version_id not in scheduled_episode.policy_version_ids:
                 continue
-            membership_stage_key = (view.round_start.round_id, membership.id)
-            if self._failed_stage_ids.get(membership_stage_key):
-                continue
-            if request.episode_result is not None and membership.policy_version_id not in score_by_policy:
+            if request.episode_result is not None and effective_membership.policy_version_id not in score_by_policy:
                 continue
 
-            completed_episodes = 1 if membership.policy_version_id in score_by_policy else 0
-            score = score_by_policy.get(membership.policy_version_id, 0.0)
+            completed_episodes = 1 if effective_membership.policy_version_id in score_by_policy else 0
+            score = score_by_policy.get(effective_membership.policy_version_id, 0.0)
             transition_rule = config._transition_rule(
                 match=ChangeMatch(
                     division=division.match,
@@ -230,9 +229,11 @@ class RulesetStrategyCommissioner(BaselineCommissioner):
                 ),
                 transitions=stage.on_episode_complete,
             )
+            if not transition_rule.match.matches(view.current_division, effective_membership):
+                continue
             change = transition_change(
                 transition_rule,
-                membership,
+                effective_membership,
                 view.divisions,
                 completed_episodes=completed_episodes,
                 score=score,
@@ -240,14 +241,13 @@ class RulesetStrategyCommissioner(BaselineCommissioner):
             if change is None:
                 continue
             if change.status == "disqualified":
-                self._failed_stage_ids.setdefault(membership_stage_key, set()).add(stage.id)
                 event_changes.append(
                     change.model_copy(
                         update={
                             "notes": self._stage_progress_notes(
                                 stages=stages,
                                 completed_stage_ids=self._completed_stage_ids.get(
-                                    (view.round_start.round_id, membership.id),
+                                    (view.round_start.round_id, effective_membership.id),
                                     set(),
                                 ),
                                 failed_stage_id=stage.id,
@@ -259,7 +259,7 @@ class RulesetStrategyCommissioner(BaselineCommissioner):
 
             progress_change = self._record_successful_stage(
                 view=view,
-                membership=membership,
+                membership=effective_membership,
                 stage=stage,
                 stages=stages,
                 change=change,
@@ -267,6 +267,7 @@ class RulesetStrategyCommissioner(BaselineCommissioner):
             if progress_change is not None:
                 event_changes.append(progress_change)
 
+        self._record_membership_events(view.round_start.round_id, view.memberships, event_changes)
         return EpisodeCompletedResponse(
             policy_membership_events=[protocol_policy_membership_event(change) for change in event_changes]
         )
@@ -410,6 +411,38 @@ class RulesetStrategyCommissioner(BaselineCommissioner):
                     )
                 )
         return CommissionerScheduleEpisodes(episodes=episodes)
+
+    def _effective_membership(self, round_id: UUID, membership: MembershipSnapshot) -> MembershipSnapshot:
+        return self._effective_memberships.get((round_id, membership.id), membership)
+
+    def _record_membership_events(
+        self,
+        round_id: UUID,
+        memberships: list[MembershipSnapshot],
+        changes: list[PolicyMembershipEventChange],
+    ) -> None:
+        memberships_by_id = {membership.id: membership for membership in memberships}
+        for change in changes:
+            membership = memberships_by_id.get(change.league_policy_membership_id)
+            if membership is None:
+                continue
+            self._record_membership_event(round_id, membership, change)
+
+    def _record_membership_event(
+        self,
+        round_id: UUID,
+        membership: MembershipSnapshot,
+        change: PolicyMembershipEventChange,
+    ) -> None:
+        effective = self._effective_membership(round_id, membership)
+        self._effective_memberships[(round_id, membership.id)] = effective.model_copy(
+            update={
+                "division_id": change.to_division_id or effective.division_id,
+                "status": change.status,
+                "substatus": change.substatus,
+                "is_champion": effective.is_champion if change.status == "competing" else False,
+            }
+        )
 
     def _record_successful_stage(
         self,
