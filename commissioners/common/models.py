@@ -270,9 +270,11 @@ class AmongThemSchedulingConfig(RoundSchedulingConfig):
     wood_division_name: str = "Wood"
 
     @model_validator(mode="after")
-    def require_inferred_minimum_champions(self) -> AmongThemSchedulingConfig:
+    def require_variant_minimum_champions(self) -> AmongThemSchedulingConfig:
         if "minimum_champions" not in self.model_fields_set:
-            raise ValueError("AmongThem scheduling requires minimum_champions inferred from the Coworld token count")
+            raise ValueError(
+                "AmongThem scheduling requires minimum_champions from the selected Coworld variant num_agents"
+            )
         return self
 
 

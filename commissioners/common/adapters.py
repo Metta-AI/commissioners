@@ -71,6 +71,9 @@ from commissioners.common.protocol import (
 from commissioners.common.protocol import (
     RoundComplete as CommissionerRoundComplete,
 )
+from commissioners.common.protocol import (
+    VariantInfo as CommissionerVariantInfo,
+)
 from commissioners.common.utils import division_entrants, select_qualifier_division
 
 if TYPE_CHECKING:
@@ -82,13 +85,27 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
+def _select_round_start_variant(
+    round_start: CommissionerRoundStart,
+    config: dict[str, Any],
+) -> tuple[str, CommissionerVariantInfo | None]:
+    variant_id = str(config.get("variant_id") or (round_start.variants[0].id if round_start.variants else "default"))
+    variant = next((candidate for candidate in round_start.variants if candidate.id == variant_id), None)
+    if variant is None and round_start.variants:
+        variant = round_start.variants[0]
+        variant_id = variant.id
+    return variant_id, variant
+
+
 def _round_start_config(round_start: CommissionerRoundStart) -> dict[str, Any]:
     config = round_start.league.commissioner_config or {}
     state = round_start.state if isinstance(round_start.state, dict) else {}
     round_config = state.get("round_config") if isinstance(state.get("round_config"), dict) else {}
     merged = {**config, **round_config}
     if "minimum_champions" not in merged and round_start.variants:
-        merged["minimum_champions"] = round_start.variants[0].num_agents
+        _, variant = _select_round_start_variant(round_start, merged)
+        if variant is not None:
+            merged["minimum_champions"] = variant.num_agents
     return merged
 
 
@@ -214,19 +231,10 @@ def _round_start_entries(round_start: CommissionerRoundStart) -> list[PolicyPool
 
 def _round_start_variant(round_start: CommissionerRoundStart) -> tuple[str, int]:
     config = _round_start_config(round_start)
-    variant_id = str(config.get("variant_id") or (round_start.variants[0].id if round_start.variants else "default"))
-    variant = next((candidate for candidate in round_start.variants if candidate.id == variant_id), None)
-    if variant is None and round_start.variants:
-        variant = round_start.variants[0]
-        variant_id = variant.id
+    variant_id, variant = _select_round_start_variant(round_start, config)
     if variant is None:
         return variant_id, len(_round_start_entries(round_start))
-    tokens = variant.game_config.get("tokens")
-    token_count = len(tokens) if isinstance(tokens, list) else None
-    num_agents = variant.num_agents or variant.game_config.get("num_agents") or token_count
-    if not isinstance(num_agents, int):
-        raise ValueError("round_start variant must include num_agents")
-    return variant_id, num_agents
+    return variant_id, variant.num_agents
 
 
 def _round_start_round(round_start: CommissionerRoundStart) -> Round:
