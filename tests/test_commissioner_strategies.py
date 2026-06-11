@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 import pytest
 import yaml
 
+from commissioners.common.adapters import _round_start_config
 from commissioners.common.models import PolicyMembershipEventChange
 from commissioners.common.protocol import (
     DescribeDivisionRequest,
@@ -1367,6 +1368,26 @@ def test_round_start_adapter_uses_extracted_commissioner_api() -> None:
     schedule = schedule_episodes_for_round_start(BaselineCommissioner(), round_start)
 
     assert schedule.episodes[0].policy_version_ids == policy_version_ids
+
+
+def test_round_start_config_infers_minimum_champions_from_selected_variant_num_agents() -> None:
+    policy_version_ids = [uuid4(), uuid4()]
+    round_start = _round_start(
+        policy_version_ids=policy_version_ids,
+        num_agents=2,
+        commissioner_config={},
+        state={"round_config": {"variant_id": "large"}},
+    )
+    round_start.variants.append(
+        VariantInfo(
+            id="large",
+            name="Large",
+            game_config={"num_agents": 8},
+            num_agents=8,
+        )
+    )
+
+    assert _round_start_config(round_start)["minimum_champions"] == 8
 
 
 def test_round_start_adapter_uses_configured_competition_division_entries() -> None:
