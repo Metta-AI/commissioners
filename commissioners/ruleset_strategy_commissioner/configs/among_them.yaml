@@ -47,6 +47,7 @@ divisions:
       - id: score_gate
         schedule:
           label: Score gate
+          self_play: true
           episodes: 2
         on_episode_complete:
           - id: passed_score_gate
@@ -68,5 +69,6 @@ divisions:
 
   competition:
     match:
+      name: Daily
       type: competition
     entrants: champions

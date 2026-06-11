@@ -10,6 +10,8 @@ from commissioners.common.models import PolicyMembershipEventChange
 from commissioners.common.protocol import (
     DescribeDivisionRequest,
     DivisionInfo,
+    EpisodeCompletedRequest,
+    EpisodeFailed,
     EpisodeRequest as ProtocolEpisodeRequest,
     EpisodeResult as ProtocolEpisodeResult,
     EpisodeScore,
@@ -58,6 +60,81 @@ def _ruleset_config(name: str) -> dict:
 
 def _ruleset_commissioner(name: str) -> RulesetStrategyCommissioner:
     return RulesetStrategyCommissioner(_ruleset_config(name))
+
+
+def _parallel_qualifier_config() -> dict:
+    return {
+        "divisions": {
+            "qualifiers": {
+                "match": {"name": "Qualifiers", "type": "staging"},
+                "entrants": "qualifying",
+                "min_entries_to_start": 1,
+                "stages": [
+                    {
+                        "id": "crash_check",
+                        "schedule": {"label": "Crash check", "attempts": 1, "self_play": True},
+                        "on_episode_complete": [
+                            {
+                                "id": "passed_crash_check",
+                                "criteria": {"completed_episodes_gt": 0},
+                                "actions": [
+                                    {
+                                        "type": "update_membership",
+                                        "status": "qualifying",
+                                        "substatus": "score_gate",
+                                    }
+                                ],
+                            },
+                            {
+                                "id": "failed_crash_check",
+                                "criteria": "otherwise",
+                                "actions": [
+                                    {
+                                        "type": "update_membership",
+                                        "status": "disqualified",
+                                        "substatus": "inactive",
+                                    }
+                                ],
+                            },
+                        ],
+                    },
+                    {
+                        "id": "score_gate",
+                        "schedule": {"label": "Score gate", "episodes": 1, "self_play": True},
+                        "on_episode_complete": [
+                            {
+                                "id": "passed_score_gate",
+                                "criteria": {"score_gt": 0},
+                                "actions": [
+                                    {
+                                        "type": "update_membership",
+                                        "division": "competition",
+                                        "status": "competing",
+                                        "substatus": "champion",
+                                    }
+                                ],
+                            },
+                            {
+                                "id": "failed_score_gate",
+                                "criteria": "otherwise",
+                                "actions": [
+                                    {
+                                        "type": "update_membership",
+                                        "status": "disqualified",
+                                        "substatus": "inactive",
+                                    }
+                                ],
+                            },
+                        ],
+                    },
+                ],
+            },
+            "competition": {
+                "match": {"name": "Daily", "type": "competition"},
+                "entrants": "champions",
+            },
+        }
+    }
 
 
 def _round_start(
@@ -505,7 +582,7 @@ def test_ruleset_strategy_four_score_config_qualifier_self_play_fills_every_slot
     ]
 
 
-def test_ruleset_strategy_among_them_config_targets_first_competition_division_without_daily_name() -> None:
+def test_ruleset_strategy_among_them_config_targets_daily_competition_division() -> None:
     qualifier_id = uuid4()
     competition_id = uuid4()
     policy_version_id = uuid4()
@@ -517,7 +594,7 @@ def test_ruleset_strategy_among_them_config_targets_first_competition_division_w
         division_name="Qualifiers",
         division_id=qualifier_id,
         division_type="staging",
-        extra_divisions=[DivisionInfo(id=competition_id, name="Wood", level=0, type="competition")],
+        extra_divisions=[DivisionInfo(id=competition_id, name="Daily", level=0, type="competition")],
     )
     round_start.memberships = [
         MembershipInfo(
@@ -531,18 +608,37 @@ def test_ruleset_strategy_among_them_config_targets_first_competition_division_w
         )
     ]
 
-    complete = complete_round_for_round_start(
-        _ruleset_commissioner("among_them"),
-        round_start,
-        [
-            ProtocolEpisodeResult(
-                request_id="0",
-                scores=[EpisodeScore(policy_version_id=policy_version_id, score=1.0)],
-            )
-        ],
+    commissioner = _ruleset_commissioner("among_them")
+    schedule = schedule_episodes_for_round_start(commissioner, round_start)
+    episodes_by_stage = {episode.tags["ruleset_stage_id"]: episode for episode in schedule.episodes}
+    score_result = ProtocolEpisodeResult(
+        request_id=episodes_by_stage["score_gate"].request_id,
+        scores=[EpisodeScore(policy_version_id=policy_version_id, score=1.0)],
+    )
+    score_response = commissioner.on_episode_complete(
+        EpisodeCompletedRequest(
+            round_start=round_start,
+            episode_result=score_result,
+            completed_episode_results=[score_result],
+            failed_episodes=[],
+        )
+    )
+    assert score_response.policy_membership_events[0].substatus == "1/2 stages completed"
+    assert "Completed stages: Score gate." in score_response.policy_membership_events[0].notes
+    crash_result = ProtocolEpisodeResult(
+        request_id=episodes_by_stage["crash_check"].request_id,
+        scores=[EpisodeScore(policy_version_id=policy_version_id, score=1.0)],
+    )
+    complete_response = commissioner.on_episode_complete(
+        EpisodeCompletedRequest(
+            round_start=round_start,
+            episode_result=crash_result,
+            completed_episode_results=[score_result, crash_result],
+            failed_episodes=[],
+        )
     )
 
-    event = complete.policy_membership_events[0]
+    event = complete_response.policy_membership_events[0]
     assert event.to_division_id == competition_id
     assert event.evidence[0].type == "ruleset_transition"
     assert event.evidence[0].metadata["transition_id"] == "passed_score_gate"
@@ -551,7 +647,7 @@ def test_ruleset_strategy_among_them_config_targets_first_competition_division_w
     assert event.evidence[0].metadata["actions"] == [
         {
             "type": "update_membership",
-            "to_division_match": {"type": "competition"},
+            "to_division_match": {"name": "Daily", "type": "competition"},
             "status": "competing",
             "substatus": "champion",
         }
@@ -584,32 +680,30 @@ def test_ruleset_strategy_among_them_config_first_qualifier_stage_advances_to_sc
         )
     ]
 
-    complete = complete_round_for_round_start(
-        _ruleset_commissioner("among_them"),
-        round_start,
-        [
-            ProtocolEpisodeResult(
-                request_id="0",
-                scores=[EpisodeScore(policy_version_id=policy_version_ids[0], score=-1.0)],
-            )
-        ],
-        [
-            ProtocolEpisodeRequest(
-                request_id="0",
-                variant_id="default",
-                policy_version_ids=[policy_version_ids[0]] * 8,
-            )
-        ],
+    commissioner = _ruleset_commissioner("among_them")
+    schedule = schedule_episodes_for_round_start(commissioner, round_start)
+    crash_episodes = [
+        episode for episode in schedule.episodes if episode.tags["ruleset_stage_id"] == "crash_check"
+    ]
+    passed_crash_result = ProtocolEpisodeResult(
+        request_id=crash_episodes[0].request_id,
+        scores=[EpisodeScore(policy_version_id=policy_version_ids[0], score=-1.0)],
+    )
+    passed_response = commissioner.on_episode_complete(
+        EpisodeCompletedRequest(
+            round_start=round_start,
+            episode_result=passed_crash_result,
+            completed_episode_results=[passed_crash_result],
+            failed_episodes=[],
+        )
     )
 
-    events = {event.league_policy_membership_id: event for event in complete.policy_membership_events}
+    events = {event.league_policy_membership_id: event for event in passed_response.policy_membership_events}
     assert events[membership_ids[0]].to_division_id == qualifier_id
     assert events[membership_ids[0]].status == "qualifying"
-    assert events[membership_ids[0]].substatus == "score_gate"
-    assert events[membership_ids[0]].reason == "Passed crash test"
-    assert events[membership_ids[0]].evidence[0].metadata["transition_id"] == "passed_crash_check"
-    assert events[membership_ids[0]].evidence[0].metadata["criteria"] == {"otherwise": True}
-    assert events[membership_ids[0]].evidence[0].metadata["observed"]["completed_episodes"] == 1
+    assert events[membership_ids[0]].substatus == "1/2 stages completed"
+    assert events[membership_ids[0]].evidence[0].metadata["completed_stage_ids"] == ["crash_check"]
+    assert "Completed stages: Crash check." in events[membership_ids[0]].notes
     assert membership_ids[1] not in events
 
 
@@ -636,21 +730,26 @@ def test_ruleset_strategy_among_them_config_scheduled_qualifier_without_scores_f
         )
     ]
 
-    complete = complete_round_for_round_start(
-        _ruleset_commissioner("among_them"),
-        round_start,
-        [],
-        [
-            ProtocolEpisodeRequest(
-                request_id="0",
-                variant_id="default",
-                policy_version_ids=[policy_version_id] * 8,
-            )
-        ],
+    commissioner = _ruleset_commissioner("among_them")
+    schedule = schedule_episodes_for_round_start(commissioner, round_start)
+    crash_episode = next(
+        episode for episode in schedule.episodes if episode.tags["ruleset_stage_id"] == "crash_check"
+    )
+    failed_episode = EpisodeFailed(
+        request_id=crash_episode.request_id,
+        error="container exited",
+    )
+    response = commissioner.on_episode_complete(
+        EpisodeCompletedRequest(
+            round_start=round_start,
+            episode_failed=failed_episode,
+            completed_episode_results=[],
+            failed_episodes=[failed_episode],
+        )
     )
 
-    assert len(complete.policy_membership_events) == 1
-    event = complete.policy_membership_events[0]
+    assert len(response.policy_membership_events) == 1
+    event = response.policy_membership_events[0]
     assert event.league_policy_membership_id == membership_id
     assert event.to_division_id is None
     assert event.status == "disqualified"
@@ -659,6 +758,142 @@ def test_ruleset_strategy_among_them_config_scheduled_qualifier_without_scores_f
     assert event.evidence[0].metadata["transition_id"] == "failed_crash_check"
     assert event.evidence[0].metadata["criteria"] == {"completed_episodes_lte": 0}
     assert event.evidence[0].metadata["observed"]["completed_episodes"] == 0
+
+
+def test_ruleset_strategy_parallel_qualifier_crash_failure_blocks_later_score_success() -> None:
+    qualifier_id = uuid4()
+    competition_id = uuid4()
+    policy_version_id = uuid4()
+    membership_id = uuid4()
+    round_start = _round_start(
+        policy_version_ids=[],
+        num_agents=1,
+        commissioner_config={},
+        division_name="Qualifiers",
+        division_id=qualifier_id,
+        division_type="staging",
+        extra_divisions=[DivisionInfo(id=competition_id, name="Daily", level=0, type="competition")],
+    )
+    round_start.memberships = [
+        MembershipInfo(
+            id=membership_id,
+            league_id=round_start.league.id,
+            division_id=qualifier_id,
+            policy_version_id=policy_version_id,
+            player_id="qualifier",
+            status="qualifying",
+        )
+    ]
+
+    commissioner = RulesetStrategyCommissioner(_parallel_qualifier_config())
+    schedule = schedule_episodes_for_round_start(commissioner, round_start)
+    episodes_by_stage = {episode.tags["ruleset_stage_id"]: episode for episode in schedule.episodes}
+    crash_failure = EpisodeFailed(
+        request_id=episodes_by_stage["crash_check"].request_id,
+        error="container exited",
+    )
+
+    failed_response = commissioner.on_episode_complete(
+        EpisodeCompletedRequest(
+            round_start=round_start,
+            episode_failed=crash_failure,
+            completed_episode_results=[],
+            failed_episodes=[crash_failure],
+        )
+    )
+
+    assert len(failed_response.policy_membership_events) == 1
+    failed_event = failed_response.policy_membership_events[0]
+    assert failed_event.league_policy_membership_id == membership_id
+    assert failed_event.to_division_id is None
+    assert failed_event.status == "disqualified"
+    assert failed_event.substatus == "inactive"
+    assert "Completed stages: none." in failed_event.notes
+    assert "Pending stages: Score gate." in failed_event.notes
+    assert "Failed stage: Crash check." in failed_event.notes
+
+    score_success = ProtocolEpisodeResult(
+        request_id=episodes_by_stage["score_gate"].request_id,
+        scores=[EpisodeScore(policy_version_id=policy_version_id, score=1.0)],
+    )
+    later_response = commissioner.on_episode_complete(
+        EpisodeCompletedRequest(
+            round_start=round_start,
+            episode_result=score_success,
+            completed_episode_results=[score_success],
+            failed_episodes=[crash_failure],
+        )
+    )
+
+    assert later_response.policy_membership_events == []
+
+
+def test_ruleset_strategy_parallel_qualifier_score_failure_blocks_later_crash_success() -> None:
+    qualifier_id = uuid4()
+    competition_id = uuid4()
+    policy_version_id = uuid4()
+    membership_id = uuid4()
+    round_start = _round_start(
+        policy_version_ids=[],
+        num_agents=1,
+        commissioner_config={},
+        division_name="Qualifiers",
+        division_id=qualifier_id,
+        division_type="staging",
+        extra_divisions=[DivisionInfo(id=competition_id, name="Daily", level=0, type="competition")],
+    )
+    round_start.memberships = [
+        MembershipInfo(
+            id=membership_id,
+            league_id=round_start.league.id,
+            division_id=qualifier_id,
+            policy_version_id=policy_version_id,
+            player_id="qualifier",
+            status="qualifying",
+        )
+    ]
+
+    commissioner = RulesetStrategyCommissioner(_parallel_qualifier_config())
+    schedule = schedule_episodes_for_round_start(commissioner, round_start)
+    episodes_by_stage = {episode.tags["ruleset_stage_id"]: episode for episode in schedule.episodes}
+    score_failure = ProtocolEpisodeResult(
+        request_id=episodes_by_stage["score_gate"].request_id,
+        scores=[EpisodeScore(policy_version_id=policy_version_id, score=0.0)],
+    )
+
+    failed_response = commissioner.on_episode_complete(
+        EpisodeCompletedRequest(
+            round_start=round_start,
+            episode_result=score_failure,
+            completed_episode_results=[score_failure],
+            failed_episodes=[],
+        )
+    )
+
+    assert len(failed_response.policy_membership_events) == 1
+    failed_event = failed_response.policy_membership_events[0]
+    assert failed_event.league_policy_membership_id == membership_id
+    assert failed_event.to_division_id is None
+    assert failed_event.status == "disqualified"
+    assert failed_event.substatus == "inactive"
+    assert "Completed stages: none." in failed_event.notes
+    assert "Pending stages: Crash check." in failed_event.notes
+    assert "Failed stage: Score gate." in failed_event.notes
+
+    crash_success = ProtocolEpisodeResult(
+        request_id=episodes_by_stage["crash_check"].request_id,
+        scores=[EpisodeScore(policy_version_id=policy_version_id, score=1.0)],
+    )
+    later_response = commissioner.on_episode_complete(
+        EpisodeCompletedRequest(
+            round_start=round_start,
+            episode_result=crash_success,
+            completed_episode_results=[score_failure, crash_success],
+            failed_episodes=[],
+        )
+    )
+
+    assert later_response.policy_membership_events == []
 
 
 def test_ruleset_strategy_among_them_score_gate_ignores_unscheduled_crash_check_member() -> None:
@@ -703,29 +938,29 @@ def test_ruleset_strategy_among_them_score_gate_ignores_unscheduled_crash_check_
         ),
     ]
 
-    complete = complete_round_for_round_start(
-        _ruleset_commissioner("among_them"),
-        round_start,
-        [
-            ProtocolEpisodeResult(
-                request_id="0",
-                scores=[EpisodeScore(policy_version_id=score_gate_policy_id, score=1.0)],
-            )
-        ],
-        [
-            ProtocolEpisodeRequest(
-                request_id="0",
-                variant_id="default",
-                policy_version_ids=[score_gate_policy_id] * 8,
-            )
-        ],
+    commissioner = _ruleset_commissioner("among_them")
+    schedule = schedule_episodes_for_round_start(commissioner, round_start)
+    score_gate_episode = next(
+        episode for episode in schedule.episodes if episode.tags["ruleset_stage_id"] == "score_gate"
+    )
+    score_result = ProtocolEpisodeResult(
+        request_id=score_gate_episode.request_id,
+        scores=[EpisodeScore(policy_version_id=score_gate_policy_id, score=1.0)],
+    )
+    response = commissioner.on_episode_complete(
+        EpisodeCompletedRequest(
+            round_start=round_start,
+            episode_result=score_result,
+            completed_episode_results=[score_result],
+            failed_episodes=[],
+        )
     )
 
-    events = {event.league_policy_membership_id: event for event in complete.policy_membership_events}
+    events = {event.league_policy_membership_id: event for event in response.policy_membership_events}
     assert crash_check_membership_id not in events
-    assert events[score_gate_membership_id].to_division_id == competition_id
-    assert events[score_gate_membership_id].status == "competing"
-    assert events[score_gate_membership_id].reason == "Passed score gate"
+    assert events[score_gate_membership_id].to_division_id == qualifier_id
+    assert events[score_gate_membership_id].status == "qualifying"
+    assert events[score_gate_membership_id].substatus == "1/2 stages completed"
 
 
 def test_ruleset_strategy_among_them_config_prioritizes_later_qualifier_stage_when_mixed() -> None:
@@ -777,7 +1012,7 @@ def test_ruleset_strategy_among_them_config_preserves_scoring_mechanics_descript
         _ruleset_commissioner("among_them"),
         DescribeDivisionRequest(
             league=LeagueInfo(id=league_id, commissioner_config={}),
-            division=DivisionInfo(id=division_id, name="Wood", level=0, type="competition"),
+            division=DivisionInfo(id=division_id, name="Daily", level=0, type="competition"),
             active_memberships=[
                 MembershipInfo(
                     id=uuid4(),
@@ -805,7 +1040,7 @@ def test_ruleset_strategy_describe_empty_configured_division_uses_configured_min
         _ruleset_commissioner("among_them"),
         DescribeDivisionRequest(
             league=LeagueInfo(id=league_id, commissioner_config={}),
-            division=DivisionInfo(id=division_id, name="Wood", level=0, type="competition"),
+            division=DivisionInfo(id=division_id, name="Daily", level=0, type="competition"),
             active_memberships=[],
             recent_rounds=[],
         ),

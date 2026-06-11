@@ -7,6 +7,8 @@ from typing import Any
 from uuid import UUID
 
 from commissioners.common.protocol import (
+    EpisodeCompletedRequest,
+    EpisodeCompletedResponse,
     EpisodeRequest as CommissionerEpisodeRequest,
 )
 from commissioners.common.protocol import (
@@ -142,6 +144,9 @@ class Commissioner(ABC):
 
     def on_round_completed(self, ctx: OnRoundCompletedContext) -> OnRoundCompletedResult:
         return OnRoundCompletedResult()
+
+    def on_episode_complete(self, request: EpisodeCompletedRequest) -> EpisodeCompletedResponse:
+        return EpisodeCompletedResponse()
 
     @abstractmethod
     def schedule_episodes(

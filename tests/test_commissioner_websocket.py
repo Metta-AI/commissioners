@@ -25,6 +25,81 @@ from commissioners.common.protocol import (
 app = commissioner_app("config_driven")
 
 
+def _parallel_qualifier_config() -> dict:
+    return {
+        "divisions": {
+            "qualifiers": {
+                "match": {"name": "Qualifiers", "type": "staging"},
+                "entrants": "qualifying",
+                "min_entries_to_start": 1,
+                "stages": [
+                    {
+                        "id": "crash_check",
+                        "schedule": {"label": "Crash check", "attempts": 1, "self_play": True},
+                        "on_episode_complete": [
+                            {
+                                "id": "passed_crash_check",
+                                "criteria": {"completed_episodes_gt": 0},
+                                "actions": [
+                                    {
+                                        "type": "update_membership",
+                                        "status": "qualifying",
+                                        "substatus": "score_gate",
+                                    }
+                                ],
+                            },
+                            {
+                                "id": "failed_crash_check",
+                                "criteria": "otherwise",
+                                "actions": [
+                                    {
+                                        "type": "update_membership",
+                                        "status": "disqualified",
+                                        "substatus": "inactive",
+                                    }
+                                ],
+                            },
+                        ],
+                    },
+                    {
+                        "id": "score_gate",
+                        "schedule": {"label": "Score gate", "episodes": 1, "self_play": True},
+                        "on_episode_complete": [
+                            {
+                                "id": "passed_score_gate",
+                                "criteria": {"score_gt": 0},
+                                "actions": [
+                                    {
+                                        "type": "update_membership",
+                                        "division": "competition",
+                                        "status": "competing",
+                                        "substatus": "champion",
+                                    }
+                                ],
+                            },
+                            {
+                                "id": "failed_score_gate",
+                                "criteria": "otherwise",
+                                "actions": [
+                                    {
+                                        "type": "update_membership",
+                                        "status": "disqualified",
+                                        "substatus": "inactive",
+                                    }
+                                ],
+                            },
+                        ],
+                    },
+                ],
+            },
+            "competition": {
+                "match": {"name": "Daily", "type": "competition"},
+                "entrants": "champions",
+            },
+        }
+    }
+
+
 def _round_start_json() -> tuple[dict, list[str]]:
     division_id = uuid4()
     league_id = uuid4()
@@ -219,6 +294,76 @@ def test_round_websocket_completes_when_one_episode_fails() -> None:
     assert [ranking["result_metadata"]["completed_episode_count"] for ranking in rankings] == [1, 1]
 
 
+def test_ruleset_strategy_round_websocket_reports_parallel_qualifier_stage_progress() -> None:
+    client = TestClient(create_app(RulesetStrategyCommissioner(_parallel_qualifier_config())))
+    qualifier_id = uuid4()
+    competition_id = uuid4()
+    league_id = uuid4()
+    membership_id = uuid4()
+    policy_version_id = uuid4()
+    round_start = RoundStart(
+        round_id=uuid4(),
+        round_number=1,
+        league=LeagueInfo(id=league_id),
+        divisions=[
+            DivisionInfo(id=qualifier_id, name="Qualifiers", level=-1, type="staging"),
+            DivisionInfo(id=competition_id, name="Daily", level=0, type="competition"),
+        ],
+        memberships=[
+            MembershipInfo(
+                id=membership_id,
+                league_id=league_id,
+                division_id=qualifier_id,
+                policy_version_id=policy_version_id,
+                status="qualifying",
+            )
+        ],
+        recent_results=[],
+        variants=[VariantInfo(id="default", name="Default", game_config={"num_agents": 1}, num_agents=1)],
+    ).to_json()
+
+    with client.websocket_connect("/round") as websocket:
+        websocket.send_json(round_start)
+        schedule = websocket.receive_json()
+        episodes_by_stage = {episode["tags"]["ruleset_stage_id"]: episode for episode in schedule["episodes"]}
+        assert set(episodes_by_stage) == {"crash_check", "score_gate"}
+
+        websocket.send_json(
+            {
+                "type": "episode_result",
+                "request_id": episodes_by_stage["score_gate"]["request_id"],
+                "scores": [EpisodeScore(policy_version_id=policy_version_id, score=1.0).model_dump(mode="json")],
+            }
+        )
+        first_response = websocket.receive_json()
+        first_event = first_response["policy_membership_events"][0]
+        assert first_response["type"] == "episode_completed_response"
+        assert first_event["status"] == "qualifying"
+        assert first_event["substatus"] == "1/2 stages completed"
+        assert "Completed stages: Score gate." in first_event["notes"]
+        assert "Pending stages: Crash check." in first_event["notes"]
+
+        websocket.send_json(
+            {
+                "type": "episode_result",
+                "request_id": episodes_by_stage["crash_check"]["request_id"],
+                "scores": [EpisodeScore(policy_version_id=policy_version_id, score=1.0).model_dump(mode="json")],
+            }
+        )
+        second_response = websocket.receive_json()
+        second_event = second_response["policy_membership_events"][0]
+        assert second_response["type"] == "episode_completed_response"
+        assert second_event["to_division_id"] == str(competition_id)
+        assert second_event["status"] == "competing"
+        assert second_event["substatus"] == "champion"
+        assert "Completed stages: Crash check, Score gate." in second_event["notes"]
+
+        complete = websocket.receive_json()
+
+    assert complete["type"] == "round_complete"
+    assert complete["policy_membership_events"] == []
+
+
 def test_round_websocket_rejects_unknown_episode_result_request_id() -> None:
     client = TestClient(app)
     round_start, _policy_version_ids = _round_start_json()
@@ -241,6 +386,7 @@ def test_round_websocket_rejects_unknown_episode_result_request_id() -> None:
 
 
 def test_protocol_accepts_prefixed_round_public_id_and_episode_completed_response() -> None:
+    membership_id = uuid4()
     round_info = RoundInfo(
         id=uuid4(),
         public_id="round_abc123",
@@ -258,9 +404,19 @@ def test_protocol_accepts_prefixed_round_public_id_and_episode_completed_respons
                     "policy_version_ids": [str(uuid4()), str(uuid4())],
                 }
             ],
+            "policy_membership_events": [
+                {
+                    "league_policy_membership_id": str(membership_id),
+                    "status": "qualifying",
+                    "substatus": "1/2 stages completed",
+                    "reason": "completed qualifier stage Score gate",
+                }
+            ],
         }
     )
 
     assert round_info.public_id == "round_abc123"
     assert isinstance(parsed, EpisodeCompletedResponse)
     assert isinstance(parsed.episodes[0], EpisodeRequest)
+    assert parsed.policy_membership_events[0].league_policy_membership_id == membership_id
+    assert parsed.policy_membership_events[0].substatus == "1/2 stages completed"

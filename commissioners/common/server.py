@@ -14,6 +14,7 @@ from commissioners.common.adapters import (
 )
 from commissioners.common.protocol import (
     DescribeDivisionRequest,
+    EpisodeCompletedRequest,
     EpisodeFailed,
     EpisodeResult,
     RankDivisionRequest,
@@ -101,6 +102,14 @@ def create_app(commissioner: Commissioner) -> FastAPI:
                         await websocket.close(code=1008, reason=f"unknown episode request id: {result.request_id!r}")
                         return
                     results_by_request_id[result.request_id] = result
+                    completed_response = commissioner.on_episode_complete(
+                        EpisodeCompletedRequest(
+                            round_start=round_start,
+                            episode_result=result,
+                            completed_episode_results=list(results_by_request_id.values()),
+                            failed_episodes=list(failed_by_request_id.values()),
+                        )
+                    )
                 elif msg_type == "episode_failed":
                     failed = EpisodeFailed.model_validate({key: value for key, value in data.items() if key != "type"})
                     if round_start is None:
@@ -110,6 +119,14 @@ def create_app(commissioner: Commissioner) -> FastAPI:
                         await websocket.close(code=1008, reason=f"unknown episode request id: {failed.request_id!r}")
                         return
                     failed_by_request_id[failed.request_id] = failed
+                    completed_response = commissioner.on_episode_complete(
+                        EpisodeCompletedRequest(
+                            round_start=round_start,
+                            episode_failed=failed,
+                            completed_episode_results=list(results_by_request_id.values()),
+                            failed_episodes=list(failed_by_request_id.values()),
+                        )
+                    )
                 elif msg_type == "episodes_accepted":
                     continue
                 elif msg_type == "episodes_rejected":
@@ -122,6 +139,11 @@ def create_app(commissioner: Commissioner) -> FastAPI:
                 else:
                     await websocket.close(code=1008, reason=f"unknown message type: {msg_type!r}")
                     return
+
+                if completed_response.episodes:
+                    expected_request_ids.update(episode.request_id for episode in completed_response.episodes)
+                if completed_response.episodes or completed_response.policy_membership_events:
+                    await websocket.send_json(completed_response.to_json())
 
                 completed_request_ids = set(results_by_request_id)
                 settled_request_ids = completed_request_ids | set(failed_by_request_id)
