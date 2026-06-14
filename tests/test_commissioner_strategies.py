@@ -552,6 +552,7 @@ def test_ruleset_strategy_cue_n_woo_config_repeats_neighbors_to_preserve_minimum
 def test_ruleset_strategy_cue_n_woo_config_uses_round_complete_transitions() -> None:
     config = _ruleset_config("cue_n_woo")
 
+    assert config["schedule_interval_minutes"] == 15
     assert "on_round_complete" in config["divisions"]["competition"]
     assert "on_episode_complete" not in config["divisions"]["competition"]
     assert "on_round_complete" in config["divisions"]["qualifiers"]["stages"][0]

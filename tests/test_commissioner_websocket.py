@@ -306,7 +306,7 @@ def test_configured_episode_timeout_reads_explicit_nested_duration() -> None:
     assert _configured_episode_timeout_seconds({"server": {"timeout_seconds": 45}}) == 45
 
 
-def test_episode_duration_limit_doubles_timeout_and_caps_at_five_minutes() -> None:
+def test_episode_duration_limit_doubles_timeout_and_caps_at_ten_minutes() -> None:
     episode = EpisodeRequest(request_id="1", variant_id="default", policy_version_ids=[uuid4(), uuid4()])
     variants = {
         "default": VariantInfo(
@@ -317,7 +317,21 @@ def test_episode_duration_limit_doubles_timeout_and_caps_at_five_minutes() -> No
         )
     }
 
-    assert _episode_duration_limit_seconds(episode, variants) == 300
+    assert _episode_duration_limit_seconds(episode, variants) == 480
+
+
+def test_episode_duration_limit_allows_ten_minute_round_timeout() -> None:
+    episode = EpisodeRequest(request_id="1", variant_id="default", policy_version_ids=[uuid4(), uuid4()])
+    variants = {
+        "default": VariantInfo(
+            id="default",
+            name="Default",
+            game_config={"round_timeout_seconds": 600},
+            num_agents=2,
+        )
+    }
+
+    assert _episode_duration_limit_seconds(episode, variants) == 600
 
 
 def test_round_websocket_rejects_unknown_episode_result_request_id() -> None:

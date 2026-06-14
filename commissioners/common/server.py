@@ -30,7 +30,7 @@ from commissioners.common.protocol import (
     ScheduleEpisodes,
 )
 
-_MAX_EPISODE_DURATION_SECONDS = 5 * 60
+_MAX_EPISODE_DURATION_SECONDS = 10 * 60
 _EXPLICIT_DURATION_KEYS = (
     "round_timeout_seconds",
     "server_duration_timeout_seconds",
