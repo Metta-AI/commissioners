@@ -28,11 +28,11 @@ MEAN_ROUND_SCORE_KIND = "mean_round_score"
 COMPLETED_EPISODE_COUNT_METADATA_KEY = "completed_episode_count"
 RANKED_SCORE_COUNT_METADATA_KEY = "ranked_score_count"
 MEAN_SCORE_EWMA_SCORING_MECHANICS = (
-    "Rounds rank policies by the average score reported by the game across each policy's episode slots. "
+    "Commissioner rankings average the scores reported by the game across each policy's episode slots. "
     "A zero score is ignored only when another policy in the same episode received a negative score, so no-show "
     "penalties do not turn an active opponent's neutral timeout score into ranking signal. "
-    "The division leaderboard only uses current average-score round results and combines completed rounds with a "
-    "2-hour half-life EWMA, so newer rounds count more than older rounds."
+    "The division leaderboard only uses current average-score results and combines completed scheduling windows with a "
+    "2-hour half-life EWMA, so newer results count more than older results."
 )
 AMONG_THEM_SCORE_KIND = MEAN_ROUND_SCORE_KIND
 AMONG_THEM_SCORING_MECHANICS = MEAN_SCORE_EWMA_SCORING_MECHANICS

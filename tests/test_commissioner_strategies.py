@@ -264,7 +264,7 @@ def test_default_commissioner_ignores_neutral_zero_scores_only_when_episode_has_
     assert rankings_by_policy[policy_version_ids[2]].result_metadata[RANKED_SCORE_COUNT_METADATA_KEY] == 1
 
 
-def test_division_leaderboard_ignores_round_result_with_no_ranked_scores() -> None:
+def test_division_leaderboard_ignores_neutral_result_with_no_ranked_episode_scores() -> None:
     division_id = uuid4()
     latest_round_id = uuid4()
     older_round_id = uuid4()
