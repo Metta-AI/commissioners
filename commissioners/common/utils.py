@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from math import ceil
 from typing import Any
 from uuid import UUID
 
 from commissioners.common.models import (
-    DIVISION_LEADERBOARD_SCORE_EWMA_HALFLIFE,
     DIVISION_TYPE_STAGING,
     DEFAULT_STAGES,
     DivisionSnapshot,
@@ -51,7 +50,11 @@ def select_division(
         if division is not None:
             return division
     if fallback_to_lowest:
-        return min(candidates, key=lambda division: division.level, default=None)
+        return min(
+            candidates,
+            key=lambda division: (division.level, division.name, str(division.id)),
+            default=None,
+        )
     return None
 
 
@@ -60,15 +63,13 @@ def select_qualifier_division(
     divisions: list[DivisionSnapshot],
 ) -> DivisionSnapshot | None:
     from commissioners.common.models import DIVISION_TYPE_STAGING
+
     config = commissioner_config or {}
-    qualifiers_division_name = config.get("qualifiers_division_name")
-    if not qualifiers_division_name:
-        return None
     return select_division(
         divisions,
-        division_name=qualifiers_division_name,
+        division_name=config.get("qualifiers_division_name"),
         division_type=DIVISION_TYPE_STAGING,
-        fallback_to_lowest=False,
+        fallback_to_lowest=True,
     )
 
 

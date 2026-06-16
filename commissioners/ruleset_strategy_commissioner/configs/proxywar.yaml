@@ -26,7 +26,6 @@ defaults:
 divisions:
   qualifiers:
     match:
-      name: Qualifiers
       type: staging
     entrants: qualifying
     min_entries_to_start: 1

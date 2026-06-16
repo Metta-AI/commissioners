@@ -62,6 +62,81 @@ def _ruleset_commissioner(name: str) -> RulesetStrategyCommissioner:
     return RulesetStrategyCommissioner(_ruleset_config(name))
 
 
+@pytest.mark.parametrize("config_name", ["among_them", "cogs_vs_clips", "cue_n_woo", "default", "four_score", "proxywar"])
+def test_ruleset_strategy_configs_do_not_pin_qualifier_division_name(config_name: str) -> None:
+    config = _ruleset_config(config_name)
+
+    assert config["divisions"]["qualifiers"]["match"] == {"type": "staging"}
+
+
+def test_baseline_commissioner_graduates_renamed_qualifier_by_topology() -> None:
+    qualifier_id = uuid4()
+    competition_id = uuid4()
+    policy_version_id = uuid4()
+    round_start = _round_start(
+        policy_version_ids=[policy_version_id],
+        num_agents=1,
+        commissioner_config={"qualifiers_division_name": "Qualifiers"},
+        division_name="Entry Gate",
+        division_id=qualifier_id,
+        division_type="staging",
+        extra_divisions=[DivisionInfo(id=competition_id, name="Daily", level=1, type="competition")],
+    )
+
+    complete = complete_round_for_round_start(
+        BaselineCommissioner(),
+        round_start,
+        [
+            ProtocolEpisodeResult(
+                request_id="0",
+                scores=[EpisodeScore(policy_version_id=policy_version_id, score=1.0)],
+            )
+        ],
+    )
+
+    assert complete.membership_changes[0].from_division_id == qualifier_id
+    assert complete.membership_changes[0].to_division_id == competition_id
+
+
+def test_ruleset_strategy_graduates_renamed_qualifier_by_topology() -> None:
+    qualifier_id = uuid4()
+    competition_id = uuid4()
+    policy_version_id = uuid4()
+    round_start = _round_start(
+        policy_version_ids=[policy_version_id],
+        num_agents=1,
+        commissioner_config={},
+        division_name="Entry Gate",
+        division_id=qualifier_id,
+        division_type="staging",
+        extra_divisions=[DivisionInfo(id=competition_id, name="Daily", level=1, type="competition")],
+    )
+
+    complete = complete_round_for_round_start(
+        _ruleset_commissioner("default"),
+        round_start,
+        [
+            ProtocolEpisodeResult(
+                request_id="0",
+                scores=[EpisodeScore(policy_version_id=policy_version_id, score=1.0)],
+            )
+        ],
+        [
+            ProtocolEpisodeRequest(
+                request_id="0",
+                variant_id="default",
+                policy_version_ids=[policy_version_id],
+            )
+        ],
+    )
+
+    event = complete.policy_membership_events[0]
+    assert event.from_division_id == qualifier_id
+    assert event.to_division_id == competition_id
+    assert event.status == "competing"
+    assert event.substatus == "champion"
+
+
 def _round_start(
     *,
     policy_version_ids: list[UUID],
