@@ -53,6 +53,10 @@ jobs:
             commissioner_key: config_driven
             ruleset_strategy_config_name: proxywar
             image: ghcr.io/metta-ai/commissioners-proxywar
+          - name: cognames-commissioner
+            commissioner_key: config_driven
+            ruleset_strategy_config_name: cognames
+            image: ghcr.io/metta-ai/commissioners-cognames
           - name: ruleset-strategy-commissioner
             commissioner_key: config_driven
             ruleset_strategy_config_name: default
