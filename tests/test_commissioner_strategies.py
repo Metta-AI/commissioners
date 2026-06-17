@@ -195,6 +195,80 @@ def test_ruleset_strategy_migration_moves_legacy_dirt_and_wood_memberships() -> 
     assert events[wood_membership_id].substatus == "champion"
 
 
+def test_ruleset_strategy_migration_uses_configured_legacy_ladder_rules() -> None:
+    league_id = uuid4()
+    retired_id = uuid4()
+    promoted_id = uuid4()
+    competition_id = uuid4()
+    retired_membership_id = uuid4()
+    promoted_membership_id = uuid4()
+
+    response = migrate_league_for_request(
+        _ruleset_commissioner("default"),
+        LeagueMigrationRequest(
+            league=LeagueInfo(
+                id=league_id,
+                commissioner_config={
+                    "division_roles": {"entry": {"type": "competition", "level": 1}},
+                    "division_ladder": {
+                        "legacy_migrations": [
+                            {
+                                "from": {"name": "Mud", "type": "competition"},
+                                "to": {
+                                    "status": "disqualified",
+                                    "substatus": "inactive",
+                                    "reason": "Tournament restructure Mud->Disqualified",
+                                    "evidence_to": "Disqualified",
+                                },
+                            },
+                            {
+                                "from": {"name": "Tree", "type": "competition"},
+                                "to": {
+                                    "role": "entry",
+                                    "reason": "Tournament restructure Tree->{target_division_name}",
+                                },
+                            },
+                        ],
+                    },
+                },
+            ),
+            divisions=[
+                DivisionInfo(id=retired_id, name="Mud", level=0, type="competition"),
+                DivisionInfo(id=promoted_id, name="Tree", level=1, type="competition"),
+                DivisionInfo(id=competition_id, name="Competition", level=1, type="competition"),
+            ],
+            memberships=[
+                MembershipInfo(
+                    id=retired_membership_id,
+                    league_id=league_id,
+                    division_id=retired_id,
+                    policy_version_id=uuid4(),
+                    status="competing",
+                ),
+                MembershipInfo(
+                    id=promoted_membership_id,
+                    league_id=league_id,
+                    division_id=promoted_id,
+                    policy_version_id=uuid4(),
+                    status="competing",
+                    substatus="champion",
+                    is_champion=True,
+                ),
+            ],
+        ),
+    )
+
+    events = {event.league_policy_membership_id: event for event in response.policy_membership_events}
+    assert set(events) == {retired_membership_id, promoted_membership_id}
+    assert events[retired_membership_id].to_division_id is None
+    assert events[retired_membership_id].status == "disqualified"
+    assert events[retired_membership_id].substatus == "inactive"
+    assert events[promoted_membership_id].to_division_id == competition_id
+    assert events[promoted_membership_id].status == "competing"
+    assert events[promoted_membership_id].substatus == "champion"
+    assert events[promoted_membership_id].reason == "Tournament restructure Tree->Competition"
+
+
 def _round_start(
     *,
     policy_version_ids: list[UUID],
@@ -202,6 +276,7 @@ def _round_start(
     commissioner_config: dict | None = None,
     division_name: str = "Bronze",
     division_id: UUID | None = None,
+    division_level: int = 0,
     division_type: str = "competition",
     extra_divisions: list[DivisionInfo] | None = None,
     state: dict | None = None,
@@ -209,7 +284,7 @@ def _round_start(
     active_division_id = division_id or uuid4()
     league_id = uuid4()
     divisions = [
-        DivisionInfo(id=active_division_id, name=division_name, level=0, type=division_type),
+        DivisionInfo(id=active_division_id, name=division_name, level=division_level, type=division_type),
         *(extra_divisions or []),
     ]
     # The helper's members are the active division's entrants: qualifying members in a
@@ -2327,6 +2402,46 @@ def test_round_start_adapter_allows_non_champion_qualifier_entries() -> None:
     schedule = schedule_episodes_for_round_start(BaselineCommissioner(), round_start)
 
     assert schedule.episodes
+    scheduled_policy_ids = {policy_id for episode in schedule.episodes for policy_id in episode.policy_version_ids}
+    assert scheduled_policy_ids == set(qualifier_policy_ids)
+
+
+def test_round_start_adapter_selects_renamed_qualifier_by_role() -> None:
+    qualifier_id = uuid4()
+    competition_id = uuid4()
+    qualifier_policy_ids = [uuid4(), uuid4()]
+    round_start = _round_start(
+        policy_version_ids=[],
+        num_agents=2,
+        commissioner_config={
+            "division_roles": {"qualifier": {"type": "staging", "level": -99}},
+            "minimum_champions": 2,
+        },
+        division_name="Tryouts",
+        division_id=qualifier_id,
+        division_level=-99,
+        division_type="staging",
+        extra_divisions=[
+            DivisionInfo(id=competition_id, name="Competition", level=1, type="competition"),
+        ],
+        state={"round_config": {"current_division_id": str(qualifier_id)}},
+    )
+    round_start.memberships.extend(
+        [
+            MembershipInfo(
+                id=uuid4(),
+                league_id=round_start.league.id,
+                division_id=qualifier_id,
+                policy_version_id=policy_version_id,
+                player_id=f"qualifier-player-{index}",
+                status="qualifying",
+            )
+            for index, policy_version_id in enumerate(qualifier_policy_ids)
+        ]
+    )
+
+    schedule = schedule_episodes_for_round_start(BaselineCommissioner(), round_start)
+
     scheduled_policy_ids = {policy_id for episode in schedule.episodes for policy_id in episode.policy_version_ids}
     assert scheduled_policy_ids == set(qualifier_policy_ids)
 

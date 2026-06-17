@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -42,6 +43,9 @@ from commissioners.common.utils import (
     _plural_word,
     _round_structure_description,
     _schedule_slot_description,
+    division_matches_selector,
+    select_competition_entry_division,
+    select_division_by_role,
 )
 from commissioners.common.ruleset_strategy.config import RulesetStrategyCommissionerConfig, load_image_ruleset_strategy_config
 from commissioners.common.ruleset_strategy.entrants import division_entries, select_rule
@@ -76,39 +80,36 @@ class RulesetStrategyCommissioner(BaselineCommissioner):
 
     def migrate_league(self, ctx: LeagueMigrationContext) -> LeagueMigrationResult:
         configured_names = {division.name for division in self._config().migration_divisions}
-        competition = next((division for division in ctx.divisions if division.name == "Competition"), None)
+        desired_divisions = [division for division in ctx.divisions if division.name in configured_names]
+        fallback_competition = select_competition_entry_division(ctx.league.commissioner_config, desired_divisions)
         divisions_by_id = {division.id: division for division in ctx.divisions}
+        migration_rules = _legacy_division_migration_rules(ctx.league.commissioner_config)
         events: list[PolicyMembershipEventChange] = []
 
         for membership in ctx.memberships:
             division = divisions_by_id.get(membership.division_id)
             if division is None or division.name in configured_names:
                 continue
-            if division.name == "Dirt" and membership.status != "disqualified":
-                events.append(
-                    PolicyMembershipEventChange(
-                        league_policy_membership_id=membership.id,
-                        from_division_id=membership.division_id,
-                        to_division_id=None,
-                        status="disqualified",
-                        substatus=POLICY_MEMBERSHIP_SUBSTATUS_INACTIVE,
-                        reason="Tournament restructure Dirt->Disqualified",
-                        end_time=datetime.now(UTC),
-                        evidence=[_legacy_division_migration_evidence(division.name, "Disqualified")],
-                    )
-                )
-            elif division.name == "Wood" and competition is not None:
-                events.append(
-                    PolicyMembershipEventChange(
-                        league_policy_membership_id=membership.id,
-                        from_division_id=membership.division_id,
-                        to_division_id=competition.id,
-                        status=_membership_status(membership.status),
-                        substatus=membership.substatus,
-                        reason=f"Tournament restructure Wood->{competition.name}",
-                        evidence=[_legacy_division_migration_evidence(division.name, competition.name)],
-                    )
-                )
+            rule = next(
+                (
+                    rule
+                    for rule in migration_rules
+                    if division_matches_selector(division, rule.get("from", rule.get("match")))
+                ),
+                None,
+            )
+            if rule is None:
+                continue
+            event = _legacy_division_migration_event(
+                rule,
+                membership=membership,
+                from_division=division,
+                target_divisions=desired_divisions,
+                commissioner_config=ctx.league.commissioner_config,
+                fallback_competition=fallback_competition,
+            )
+            if event is not None:
+                events.append(event)
         return LeagueMigrationResult(policy_membership_events=events)
 
     def rank_division(self, ctx: DivisionLeaderboardContext) -> list[DivisionLeaderboardSnapshot]:
@@ -281,6 +282,138 @@ class RulesetStrategyCommissioner(BaselineCommissioner):
 
 def _membership_status(status: Any) -> str:
     return status.value if hasattr(status, "value") else str(status)
+
+
+def _legacy_division_migration_rules(commissioner_config: Mapping[str, Any] | None) -> Sequence[Mapping[str, Any]]:
+    config = commissioner_config or {}
+    division_ladder = config.get("division_ladder")
+    rules = division_ladder.get("legacy_migrations") if isinstance(division_ladder, Mapping) else None
+    if isinstance(rules, Sequence) and not isinstance(rules, str):
+        return [rule for rule in rules if isinstance(rule, Mapping)]
+    return (
+        {
+            "from": {"name": "Dirt"},
+            "to": {
+                "status": "disqualified",
+                "substatus": POLICY_MEMBERSHIP_SUBSTATUS_INACTIVE,
+                "reason": "Tournament restructure Dirt->Disqualified",
+                "evidence_to": "Disqualified",
+            },
+        },
+        {
+            "from": {"name": "Wood"},
+            "to": {
+                "role": "entry",
+                "reason": "Tournament restructure Wood->{target_division_name}",
+            },
+        },
+    )
+
+
+def _legacy_division_migration_event(
+    rule: Mapping[str, Any],
+    *,
+    membership: Any,
+    from_division: Any,
+    target_divisions: Sequence[Any],
+    commissioner_config: Mapping[str, Any] | None,
+    fallback_competition: Any | None,
+) -> PolicyMembershipEventChange | None:
+    action = rule.get("to")
+    if not isinstance(action, Mapping):
+        return None
+
+    target_division = _legacy_division_migration_target(
+        action,
+        commissioner_config,
+        target_divisions,
+        fallback_competition,
+    )
+    status = action.get("status")
+    if status == "disqualified" and _membership_status(membership.status) == "disqualified":
+        return None
+    if target_division is None and status != "disqualified":
+        return None
+
+    target_name = _legacy_division_migration_target_name(action, target_division)
+    return PolicyMembershipEventChange(
+        league_policy_membership_id=membership.id,
+        from_division_id=membership.division_id,
+        to_division_id=None if target_division is None else target_division.id,
+        status=str(status) if status is not None else _membership_status(membership.status),
+        substatus=action.get("substatus", membership.substatus),
+        reason=_legacy_division_migration_reason(action, from_division.name, target_name),
+        end_time=datetime.now(UTC) if status == "disqualified" else None,
+        evidence=[_legacy_division_migration_evidence(from_division.name, target_name)],
+    )
+
+
+def _legacy_division_migration_target(
+    action: Mapping[str, Any],
+    commissioner_config: Mapping[str, Any] | None,
+    target_divisions: Sequence[Any],
+    fallback_competition: Any | None,
+) -> Any | None:
+    role = action.get("role", action.get("to_role"))
+    if isinstance(role, str):
+        target = select_division_by_role(commissioner_config, target_divisions, roles=(role,))
+        if target is not None:
+            return target
+        if role in {"entry", "default", "competition"}:
+            return fallback_competition
+
+    selector = (
+        action.get("division")
+        or action.get("to_division")
+        or action.get("division_selector")
+        or _selector_from_flat_action(action)
+    )
+    if selector is not None:
+        return next(
+            (division for division in target_divisions if division_matches_selector(division, selector)),
+            None,
+        )
+    return None
+
+
+def _selector_from_flat_action(action: Mapping[str, Any]) -> dict[str, Any] | None:
+    selector = {
+        selector_key: action[action_key]
+        for action_key, selector_key in (
+            ("division_id", "id"),
+            ("to_division_id", "id"),
+            ("division_name", "name"),
+            ("to_division_name", "name"),
+            ("division_type", "type"),
+            ("to_division_type", "type"),
+            ("division_level", "level"),
+            ("to_division_level", "level"),
+        )
+        if action_key in action
+    }
+    return selector or None
+
+
+def _legacy_division_migration_target_name(action: Mapping[str, Any], target_division: Any | None) -> str:
+    if target_division is not None:
+        return str(target_division.name)
+    evidence_to = action.get("evidence_to")
+    if evidence_to is not None:
+        return str(evidence_to)
+    status = action.get("status")
+    if status is not None:
+        return str(status).title()
+    return "Removed"
+
+
+def _legacy_division_migration_reason(action: Mapping[str, Any], from_name: str, target_name: str) -> str:
+    reason = action.get("reason")
+    if not isinstance(reason, str):
+        reason = "Tournament restructure {from_division_name}->{target_division_name}"
+    return reason.format(
+        from_division_name=from_name,
+        target_division_name=target_name,
+    )
 
 
 def _legacy_division_migration_evidence(from_division: str, to_division: str) -> PolicyMembershipEventEvidence:
