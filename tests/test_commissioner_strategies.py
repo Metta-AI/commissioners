@@ -312,19 +312,19 @@ def test_default_commissioner_round_robin_generation_and_ranking() -> None:
             EpisodeResult(
                 episode_request_id=uuid4(),
                 scores=[
-                    RoundPolicyScore(policy_version_id=policy_version_ids[0], score=4.0),
-                    RoundPolicyScore(policy_version_id=policy_version_ids[1], score=2.0),
-                    RoundPolicyScore(policy_version_id=policy_version_ids[2], score=6.0),
-                    RoundPolicyScore(policy_version_id=policy_version_ids[0], score=8.0),
+                    RoundPolicyScore(policy_version_id=policy_version_ids[0], score=4.0, scores={"territory": 1.0}),
+                    RoundPolicyScore(policy_version_id=policy_version_ids[1], score=2.0, scores={"territory": 2.0}),
+                    RoundPolicyScore(policy_version_id=policy_version_ids[2], score=6.0, scores={"territory": 3.0}),
+                    RoundPolicyScore(policy_version_id=policy_version_ids[0], score=8.0, scores={"territory": 5.0}),
                 ],
             ),
             EpisodeResult(
                 episode_request_id=uuid4(),
                 scores=[
-                    RoundPolicyScore(policy_version_id=policy_version_ids[1], score=10.0),
-                    RoundPolicyScore(policy_version_id=policy_version_ids[2], score=0.0),
-                    RoundPolicyScore(policy_version_id=policy_version_ids[0], score=6.0),
-                    RoundPolicyScore(policy_version_id=policy_version_ids[1], score=4.0),
+                    RoundPolicyScore(policy_version_id=policy_version_ids[1], score=10.0, scores={"territory": 4.0}),
+                    RoundPolicyScore(policy_version_id=policy_version_ids[2], score=0.0, scores={"territory": 1.0}),
+                    RoundPolicyScore(policy_version_id=policy_version_ids[0], score=6.0, scores={"territory": 2.0}),
+                    RoundPolicyScore(policy_version_id=policy_version_ids[1], score=4.0, scores={"territory": 6.0}),
                 ],
             ),
         ],
@@ -337,6 +337,7 @@ def test_default_commissioner_round_robin_generation_and_ranking() -> None:
         policy_version_ids[2],
     ]
     assert [ranking.score for ranking in rankings] == pytest.approx([6.0, 16.0 / 3.0, 3.0])
+    assert rankings[0].result_metadata["scores"] == pytest.approx({"score": 6.0, "territory": 8.0 / 3.0})
 
 
 def test_ruleset_strategy_rank_round_score_uses_per_episode_placement() -> None:

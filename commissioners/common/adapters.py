@@ -352,6 +352,7 @@ def complete_round_for_round_start(
                     policy_version_id=score.policy_version_id,
                     player_id=score.player_id,
                     score=score.score,
+                    scores=score.scores,
                 )
                 for score in result.scores
             ],
