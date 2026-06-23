@@ -155,6 +155,13 @@ class RoundPolicyScore(BaseModel):
     policy_version_id: UUID
     player_id: PlayerId | None = None
     score: float
+    scores: dict[str, float] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def include_primary_score(self) -> "RoundPolicyScore":
+        if "score" not in self.scores:
+            self.scores = {"score": self.score, **self.scores}
+        return self
 
 
 class EpisodeResult(BaseModel):

@@ -443,6 +443,19 @@ class BaselineCommissioner(Commissioner):
         episode_results: list[EpisodeResult],
     ) -> CommissionerRoundComplete:
         round_score_by_policy, ranked_score_counts = self._round_scores_by_policy(entries, episode_results)
+        score_field_lists_by_policy: dict[UUID, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
+        for result in episode_results:
+            for score in result.scores:
+                for key, value in score.scores.items():
+                    score_field_lists_by_policy[score.policy_version_id][key].append(value)
+        avg_score_fields_by_policy = {
+            entry.policy_version_id: {
+                key: sum(values) / len(values)
+                for key, values in sorted(score_field_lists_by_policy.get(entry.policy_version_id, {}).items())
+                if values
+            }
+            for entry in entries
+        }
         completed_episode_counts: dict[UUID, int] = defaultdict(int)
         for result in episode_results:
             for policy_version_id in {score.policy_version_id for score in result.scores}:
@@ -465,6 +478,10 @@ class BaselineCommissioner(Commissioner):
                     "seed_order": entry.seed_order,
                     COMPLETED_EPISODE_COUNT_METADATA_KEY: completed_episode_counts[entry.policy_version_id],
                     RANKED_SCORE_COUNT_METADATA_KEY: ranked_score_counts[entry.policy_version_id],
+                    "scores": {
+                        "score": round_score_by_policy[entry.policy_version_id],
+                        **avg_score_fields_by_policy[entry.policy_version_id],
+                    },
                 },
             )
             for rank, entry in enumerate(ranked_entries, start=1)
