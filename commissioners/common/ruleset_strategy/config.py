@@ -159,12 +159,26 @@ class LeaderboardScoringConfig(_ConfigModel):
     half_life_hours: float = Field(default=2.0, gt=0)
 
 
+class LeaderboardTableConfig(_ConfigModel):
+    id: str
+    label: str | None = None
+    description: str | None = None
+    score_key: str = "score"
+    score_label: str | None = None
+    half_life_hours: float | None = Field(default=None, gt=0)
+    window_hours: float | None = Field(default=None, gt=0)
+    lookback_hours: float | None = Field(default=None, gt=0)
+    primary: bool = False
+
+
 class ScoringConfig(_ConfigModel):
     # "mean": round score is the mean of a policy's per-episode scores.
     # "rank": round score is the mean of a policy's per-episode rank points (placement within
     #         each episode, N..1), so margins of victory are discarded and only placement counts.
     round_score: Literal["mean", "rank"] = "mean"
     leaderboard: LeaderboardScoringConfig = Field(default_factory=LeaderboardScoringConfig)
+    leaderboards: list[LeaderboardTableConfig] = Field(default_factory=list)
+    leaderboard_tables: list[LeaderboardTableConfig] = Field(default_factory=list)
     mechanics: str | None = None
 
 

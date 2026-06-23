@@ -33,6 +33,7 @@ from commissioners.common.protocol import (
     DivisionDescription as CommissionerDivisionDescription,
     DivisionConfig as CommissionerDivisionConfig,
     DivisionLeaderboardEntry as CommissionerDivisionLeaderboardEntry,
+    DivisionLeaderboardTable as CommissionerDivisionLeaderboardTable,
 )
 from commissioners.common.protocol import (
     MembershipChange as CommissionerMembershipChange,
@@ -316,6 +317,16 @@ def _protocol_leaderboard_entry(entry: CommissionerDivisionLeaderboardEntry) -> 
     return CommissionerDivisionLeaderboardEntry.model_validate(entry.model_dump(mode="json"))
 
 
+def _protocol_leaderboard_table(table: Any) -> CommissionerDivisionLeaderboardTable:
+    return CommissionerDivisionLeaderboardTable(
+        id=table.id,
+        label=table.label,
+        description=table.description,
+        score_label=table.score_label,
+        rankings=[_protocol_leaderboard_entry(entry) for entry in table.entries],
+    )
+
+
 def _protocol_division_description(
     description: CommissionerDivisionDescription,
 ) -> CommissionerDivisionDescription:
@@ -517,7 +528,7 @@ def rank_division_for_request(
     commissioner: Commissioner,
     request: RankDivisionRequest,
 ) -> RankDivisionResponse:
-    rankings = commissioner.rank_division(
+    tables = commissioner.rank_division_tables(
         DivisionLeaderboardContext(
             league=LeagueSnapshot(
                 id=request.league.id,
@@ -547,7 +558,10 @@ def rank_division_for_request(
             ],
         )
     )
-    return RankDivisionResponse(rankings=[_protocol_leaderboard_entry(ranking) for ranking in rankings])
+    return RankDivisionResponse(
+        primary_table_id=tables.primary_table_id,
+        tables=[_protocol_leaderboard_table(table) for table in tables.tables],
+    )
 
 
 def describe_division_for_request(

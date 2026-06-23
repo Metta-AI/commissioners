@@ -185,6 +185,17 @@ class DivisionLeaderboardEntry(BaseModel):
     recent_rounds: list[dict[str, Any]] | None = None
 
 
+class DivisionLeaderboardTable(BaseModel):
+    # Stable table identifier used by primary_table_id and clients; usually the metric key.
+    id: str = "score"
+    # Human-facing table/tab title, e.g. "Winrate 24h".
+    label: str = "Score"
+    description: str | None = None
+    # Human-facing label for entry.score in this table, e.g. "Winrate".
+    score_label: str = "Score"
+    rankings: list[DivisionLeaderboardEntry] = Field(default_factory=list)
+
+
 class DivisionDescription(BaseModel):
     round_schedule: str | None = None
     next_round: str | None = None
@@ -375,7 +386,24 @@ class RankDivisionRequest(BaseModel):
 
 
 class RankDivisionResponse(BaseModel):
+    primary_table_id: str = "score"
+    tables: list[DivisionLeaderboardTable] = Field(default_factory=list)
+    # TODO: delete compatibility shim after metta and clients read `tables`.
     rankings: list[DivisionLeaderboardEntry] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def fill_compatibility_fields(self) -> "RankDivisionResponse":
+        if not self.tables:
+            self.tables = [
+                DivisionLeaderboardTable(
+                    id=self.primary_table_id,
+                    rankings=self.rankings,
+                )
+            ]
+        if not self.rankings:
+            primary_table = next((table for table in self.tables if table.id == self.primary_table_id), self.tables[0])
+            self.rankings = primary_table.rankings
+        return self
 
     def to_json(self) -> dict[str, Any]:
         data = self.model_dump(mode="json")

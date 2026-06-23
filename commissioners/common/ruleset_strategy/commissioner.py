@@ -12,6 +12,7 @@ from commissioners.common.models import (
     DivisionDescriptionContext,
     DivisionLeaderboardContext,
     DivisionLeaderboardSnapshot,
+    DivisionLeaderboardTablesSnapshot,
     EpisodeResult,
     LeagueMigrationConfigContext,
     LeagueMigrationContext,
@@ -123,6 +124,28 @@ class RulesetStrategyCommissioner(BaselineCommissioner):
             ]
             ctx = ctx.model_copy(update={"round_results": filtered})
         return super().rank_division(ctx)
+
+    def rank_division_tables(self, ctx: DivisionLeaderboardContext) -> DivisionLeaderboardTablesSnapshot:
+        config = self._config()
+        if config.ranking.filter_metadata:
+            filtered = [
+                result
+                for result in ctx.round_results
+                if all(result.result_metadata.get(key) == value for key, value in config.ranking.filter_metadata.items())
+            ]
+            ctx = ctx.model_copy(update={"round_results": filtered})
+        table_configs = []
+        default_half_life_hours = config.ranking.ewma_halflife_hours
+        if config.scoring is not None:
+            table_configs = [
+                table.model_dump(exclude_none=True)
+                for table in [*config.scoring.leaderboards, *config.scoring.leaderboard_tables]
+            ]
+        return self._rank_division_tables_from_config(
+            ctx,
+            table_configs,
+            default_half_life_hours=default_half_life_hours,
+        )
 
     def _leaderboard_ewma_halflife(self, ctx: DivisionLeaderboardContext) -> timedelta:
         config = self._config()

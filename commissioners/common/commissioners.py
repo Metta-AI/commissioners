@@ -65,6 +65,8 @@ from commissioners.common.models import (
     RoundSnapshot,
     RoundResultSnapshot,
     DivisionLeaderboardSnapshot,
+    DivisionLeaderboardTableSnapshot,
+    DivisionLeaderboardTablesSnapshot,
     _LeaderboardAgg,
     LeaderboardRoundResultSnapshot,
     RoundSpec,
@@ -160,6 +162,16 @@ class Commissioner(ABC):
     @abstractmethod
     def rank_division(self, ctx: DivisionLeaderboardContext) -> list[DivisionLeaderboardSnapshot]: ...
 
+    def rank_division_tables(self, ctx: DivisionLeaderboardContext) -> DivisionLeaderboardTablesSnapshot:
+        # TODO: delete compatibility shim after all commissioners implement table-native ranking.
+        return DivisionLeaderboardTablesSnapshot(
+            tables=[
+                DivisionLeaderboardTableSnapshot(
+                    entries=self.rank_division(ctx),
+                )
+            ]
+        )
+
     @abstractmethod
     def describe_division(self, ctx: DivisionDescriptionContext) -> DivisionCommissionerDescriptionPublic: ...
 
@@ -210,6 +222,188 @@ class BaselineCommissioner(Commissioner):
 
     def _scheduling_config(self, commissioner_config: dict[str, Any] | None) -> RoundSchedulingConfig:
         return RoundSchedulingConfig.model_validate(commissioner_config or {})
+
+    def _round_result_score(self, result: LeaderboardRoundResultSnapshot, score_key: str) -> float | None:
+        if score_key == "score":
+            return result.score
+        scores = result.result_metadata.get("scores")
+        if not isinstance(scores, dict):
+            return None
+        value = scores.get(score_key)
+        return float(value) if isinstance(value, (int, float)) else None
+
+    def _rank_division_table_by_metric(
+        self,
+        ctx: DivisionLeaderboardContext,
+        *,
+        table_id: str = "score",
+        label: str = "Score",
+        description: str | None = None,
+        score_label: str = "Score",
+        score_key: str = "score",
+        half_life_hours: float | None = None,
+        window_hours: float | None = None,
+    ) -> DivisionLeaderboardTableSnapshot:
+        if not ctx.completed_rounds or not ctx.round_results:
+            return DivisionLeaderboardTableSnapshot(
+                id=table_id,
+                label=label,
+                description=description,
+                score_label=score_label,
+            )
+
+        completed_rounds = ctx.completed_rounds
+        latest_completed_at = completed_rounds[0].completed_at
+        assert latest_completed_at is not None, f"Completed round {ctx.completed_rounds[0].id} is missing completed_at"
+        if window_hours is not None:
+            cutoff = latest_completed_at - timedelta(hours=window_hours)
+            completed_rounds = [
+                round_row
+                for round_row in completed_rounds
+                if round_row.completed_at is not None and round_row.completed_at >= cutoff
+            ]
+        if not completed_rounds:
+            return DivisionLeaderboardTableSnapshot(
+                id=table_id,
+                label=label,
+                description=description,
+                score_label=score_label,
+            )
+
+        completed_rounds_by_id = {round_row.id: round_row for round_row in completed_rounds}
+        halflife_seconds = (
+            timedelta(hours=half_life_hours).total_seconds()
+            if half_life_hours is not None
+            else self._leaderboard_ewma_halflife(ctx).total_seconds()
+        )
+
+        player_rounds: dict[tuple[PlayerId, UUID], LeaderboardRoundResultSnapshot] = {}
+        for result in ctx.round_results:
+            if int(result.result_metadata.get(RANKED_SCORE_COUNT_METADATA_KEY, 1)) <= 0:
+                continue
+            score = self._round_result_score(result, score_key)
+            if score is None:
+                continue
+            key = (result.player_id, result.round_id)
+            current = player_rounds.get(key)
+            current_score = self._round_result_score(current, score_key) if current is not None else None
+            if current is None or current_score is None or (score, -result.rank) > (current_score, -current.rank):
+                player_rounds[key] = result
+
+        rounds_played_by_player: dict[PlayerId, int] = {}
+        aggs: dict[PlayerId, _LeaderboardAgg] = {}
+        for player_round in player_rounds.values():
+            round_row = completed_rounds_by_id.get(player_round.round_id)
+            if round_row is None:
+                continue
+            score = self._round_result_score(player_round, score_key)
+            if score is None:
+                continue
+            rounds_played_by_player[player_round.player_id] = rounds_played_by_player.get(player_round.player_id, 0) + 1
+            if player_round.player_id not in aggs:
+                aggs[player_round.player_id] = _LeaderboardAgg(
+                    player_id=player_round.player_id,
+                    player_name=player_round.player_name,
+                )
+            assert round_row.completed_at is not None, f"Completed round {round_row.id} is missing completed_at"
+            weight = 0.5 ** ((latest_completed_at - round_row.completed_at).total_seconds() / halflife_seconds)
+            aggs[player_round.player_id].policy_version_ids.add(player_round.policy_version_id)
+            aggs[player_round.player_id].weighted_score_sum += score * weight
+            aggs[player_round.player_id].weight_sum += weight
+
+        ranks_by_round_and_player = {
+            (player_round.round_id, player_round.player_id): player_round.rank
+            for player_round in player_rounds.values()
+        }
+        scores_by_round_and_player = {
+            (player_round.round_id, player_round.player_id): self._round_result_score(player_round, score_key)
+            for player_round in player_rounds.values()
+        }
+
+        def build_recent_rounds(player_id: PlayerId) -> list[LeaderboardRecentRoundPublic] | None:
+            if not ctx.recent_rounds:
+                return None
+            return [
+                LeaderboardRecentRoundPublic(
+                    id=round_row.public_id,
+                    round_number=round_row.round_number,
+                    status=round_row.status,
+                    rank=ranks_by_round_and_player.get((round_row.id, player_id)),
+                    score=scores_by_round_and_player.get((round_row.id, player_id)),
+                    started_at=round_row.started_at,
+                    completed_at=round_row.completed_at,
+                )
+                for round_row in ctx.recent_rounds
+            ]
+
+        ranked_aggs = sorted(
+            [agg for agg in aggs.values() if agg.weight_sum > 0],
+            key=lambda agg: (
+                -agg.score(),
+                agg.player_name or "",
+                str(agg.player_id),
+            ),
+        )
+        return DivisionLeaderboardTableSnapshot(
+            id=table_id,
+            label=label,
+            description=description,
+            score_label=score_label,
+            entries=[
+                DivisionLeaderboardSnapshot(
+                    player_id=agg.player_id,
+                    player_name=agg.player_name,
+                    rank=rank,
+                    score=agg.score(),
+                    rounds_played=rounds_played_by_player[agg.player_id],
+                    policy_version_ids=agg.policy_version_ids,
+                    recent_rounds=build_recent_rounds(agg.player_id),
+                )
+                for rank, agg in enumerate(ranked_aggs, start=1)
+            ],
+        )
+
+    def _rank_division_tables_from_config(
+        self,
+        ctx: DivisionLeaderboardContext,
+        leaderboard_configs: list[dict[str, Any]],
+        *,
+        default_half_life_hours: float | None = None,
+    ) -> DivisionLeaderboardTablesSnapshot:
+        if not leaderboard_configs:
+            leaderboard_configs = [{"id": "score", "label": "Score", "score_key": "score", "primary": True}]
+
+        primary_table_id = "score"
+        tables: list[DivisionLeaderboardTableSnapshot] = []
+        for raw_table in leaderboard_configs:
+            score_key = str(raw_table.get("score_key") or raw_table.get("metric") or raw_table.get("id") or "score")
+            table_id = str(raw_table.get("id") or score_key)
+            if raw_table.get("primary", False):
+                primary_table_id = table_id
+            label = str(raw_table.get("label") or score_key.replace("_", " ").title())
+            score_label = str(raw_table.get("score_label") or label)
+            window_hours = raw_table.get("window_hours", raw_table.get("lookback_hours"))
+            tables.append(
+                self._rank_division_table_by_metric(
+                    ctx,
+                    table_id=table_id,
+                    label=label,
+                    description=raw_table.get("description"),
+                    score_label=score_label,
+                    score_key=score_key,
+                    half_life_hours=float(raw_table.get("half_life_hours", default_half_life_hours))
+                    if raw_table.get("half_life_hours", default_half_life_hours) is not None
+                    else None,
+                    window_hours=float(window_hours) if window_hours is not None else None,
+                )
+            )
+
+        if not any(table.id == primary_table_id for table in tables) and tables:
+            primary_table_id = tables[0].id
+        return DivisionLeaderboardTablesSnapshot(primary_table_id=primary_table_id, tables=tables)
+
+    def rank_division_tables(self, ctx: DivisionLeaderboardContext) -> DivisionLeaderboardTablesSnapshot:
+        return self._rank_division_tables_from_config(ctx, [])
 
     def rank_division(self, ctx: DivisionLeaderboardContext) -> list[DivisionLeaderboardSnapshot]:
         if not ctx.completed_rounds or not ctx.round_results:

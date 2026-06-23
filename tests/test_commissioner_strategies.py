@@ -1663,6 +1663,96 @@ def test_ruleset_strategy_scoring_configures_leaderboard_ewma_halflife() -> None
     assert response.rankings[0].score == pytest.approx(8.0)
 
 
+def test_ruleset_strategy_scoring_configures_multiple_leaderboard_tables() -> None:
+    league_id = uuid4()
+    division_id = uuid4()
+    recent_round_id = uuid4()
+    old_round_id = uuid4()
+    player_a_policy_id = uuid4()
+    player_b_policy_id = uuid4()
+    commissioner = RulesetStrategyCommissioner(
+        {
+            "scoring": {
+                "round_score": "mean",
+                "leaderboards": [
+                    {"id": "score_all", "label": "Score", "score_key": "score"},
+                    {
+                        "id": "winrate_24h",
+                        "label": "Winrate 24h",
+                        "score_key": "winrate",
+                        "score_label": "Winrate",
+                        "window_hours": 24,
+                        "primary": True,
+                    },
+                ],
+            },
+            "divisions": {"competition": {"match": {"type": "competition"}, "entrants": "champions"}},
+        }
+    )
+
+    response = rank_division_for_request(
+        commissioner,
+        RankDivisionRequest(
+            league=LeagueInfo(id=league_id),
+            division=DivisionInfo(id=division_id, name="Competition", level=1),
+            completed_rounds=[
+                RoundInfo(
+                    id=recent_round_id,
+                    public_id="round_recent",
+                    division_id=division_id,
+                    round_number=2,
+                    status="completed",
+                    completed_at="2026-06-23T00:00:00+00:00",
+                ),
+                RoundInfo(
+                    id=old_round_id,
+                    public_id="round_old",
+                    division_id=division_id,
+                    round_number=1,
+                    status="completed",
+                    completed_at="2026-06-21T00:00:00+00:00",
+                ),
+            ],
+            recent_rounds=[],
+            round_results=[
+                LeaderboardRoundResultInfo(
+                    round_id=recent_round_id,
+                    policy_version_id=player_a_policy_id,
+                    player_id="player-a",
+                    player_name="Alice",
+                    rank=2,
+                    score=10.0,
+                    result_metadata={"score_kind": MEAN_ROUND_SCORE_KIND, "scores": {"score": 10.0, "winrate": 0.2}},
+                ),
+                LeaderboardRoundResultInfo(
+                    round_id=recent_round_id,
+                    policy_version_id=player_b_policy_id,
+                    player_id="player-b",
+                    player_name="Bob",
+                    rank=1,
+                    score=8.0,
+                    result_metadata={"score_kind": MEAN_ROUND_SCORE_KIND, "scores": {"score": 8.0, "winrate": 0.9}},
+                ),
+                LeaderboardRoundResultInfo(
+                    round_id=old_round_id,
+                    policy_version_id=player_a_policy_id,
+                    player_id="player-a",
+                    player_name="Alice",
+                    rank=1,
+                    score=50.0,
+                    result_metadata={"score_kind": MEAN_ROUND_SCORE_KIND, "scores": {"score": 50.0, "winrate": 1.0}},
+                ),
+            ],
+        ),
+    )
+
+    assert response.primary_table_id == "winrate_24h"
+    assert [table.id for table in response.tables] == ["score_all", "winrate_24h"]
+    assert response.tables[0].rankings[0].player_id == "player-a"
+    assert response.tables[1].rankings[0].player_id == "player-b"
+    assert response.rankings == response.tables[1].rankings
+
+
 def test_baseline_round_start_uses_is_champion_for_competition_entries() -> None:
     division_id = uuid4()
     boolean_champion_id = uuid4()

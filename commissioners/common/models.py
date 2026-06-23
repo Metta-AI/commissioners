@@ -401,6 +401,28 @@ class DivisionLeaderboardSnapshot(BaseModel):
     recent_rounds: list[LeaderboardRecentRoundPublic] | None = None
 
 
+class DivisionLeaderboardTableSnapshot(BaseModel):
+    # Stable table identifier used by primary_table_id and clients; usually the metric key.
+    id: str = "score"
+    # Human-facing table/tab title, e.g. "Winrate 24h".
+    label: str = "Score"
+    description: str | None = None
+    # Human-facing label for entry.score in this table, e.g. "Winrate".
+    score_label: str = "Score"
+    entries: list[DivisionLeaderboardSnapshot] = Field(default_factory=list)
+
+
+class DivisionLeaderboardTablesSnapshot(BaseModel):
+    # id of the table to expose through legacy single-leaderboard compatibility paths.
+    primary_table_id: str = "score"
+    tables: list[DivisionLeaderboardTableSnapshot] = Field(default_factory=list)
+
+    def primary_table(self) -> DivisionLeaderboardTableSnapshot:
+        if not self.tables:
+            return DivisionLeaderboardTableSnapshot(id=self.primary_table_id)
+        return next((table for table in self.tables if table.id == self.primary_table_id), self.tables[0])
+
+
 class _LeaderboardAgg(BaseModel):
     player_id: PlayerId
     player_name: str | None = None
