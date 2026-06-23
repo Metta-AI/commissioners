@@ -159,12 +159,55 @@ class LeaderboardScoringConfig(_ConfigModel):
     half_life_hours: float = Field(default=2.0, gt=0)
 
 
+class LeaderboardAxisConfig(_ConfigModel):
+    key: str
+    label: str | None = None
+    value_type: Literal["number", "integer", "string", "boolean"] = "number"
+    sort: Literal["asc", "desc"] | None = None
+
+
+class LeaderboardViewConfig(_ConfigModel):
+    key: str = ""
+    title: str | None = None
+    description: str | None = None
+    score_key: str | None = None
+    score_axis_label: str | None = None
+    axes: list[LeaderboardAxisConfig] = Field(default_factory=list)
+    half_life_hours: float | None = Field(default=None, gt=0)
+    window_hours: float | None = Field(default=None, gt=0)
+    lookback_hours: float | None = Field(default=None, gt=0)
+    default: bool = False
+    # TODO: delete compatibility fields after old config payloads stop using table terminology.
+    id: str | None = None
+    label: str | None = None
+    score_label: str | None = None
+    primary: bool = False
+
+    @model_validator(mode="after")
+    def fill_compatibility_names(self) -> "LeaderboardViewConfig":
+        if self.id is not None and self.key == "":
+            self.key = self.id
+        if self.key == "":
+            score_axis = next((axis for axis in self.axes if axis.sort == "desc"), None)
+            self.key = self.score_key or (score_axis.key if score_axis is not None else "score")
+        if self.title is None and self.label is not None:
+            self.title = self.label
+        if self.score_axis_label is None and self.score_label is not None:
+            self.score_axis_label = self.score_label
+        if self.primary:
+            self.default = True
+        return self
+
+
 class ScoringConfig(_ConfigModel):
     # "mean": round score is the mean of a policy's per-episode scores.
     # "rank": round score is the mean of a policy's per-episode rank points (placement within
     #         each episode, N..1), so margins of victory are discarded and only placement counts.
     round_score: Literal["mean", "rank"] = "mean"
     leaderboard: LeaderboardScoringConfig = Field(default_factory=LeaderboardScoringConfig)
+    leaderboards: list[LeaderboardViewConfig] = Field(default_factory=list)
+    # TODO: delete compatibility field after old config payloads stop using table terminology.
+    leaderboard_tables: list[LeaderboardViewConfig] = Field(default_factory=list)
     mechanics: str | None = None
 
 
