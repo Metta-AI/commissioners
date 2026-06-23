@@ -82,6 +82,13 @@ class EpisodeScore(BaseModel):
     policy_version_id: UUID
     player_id: str | None = None
     score: float
+    scores: dict[str, float] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def include_primary_score(self) -> EpisodeScore:
+        if "score" not in self.scores:
+            self.scores = {"score": self.score, **self.scores}
+        return self
 
 
 class RankingEntry(BaseModel):
