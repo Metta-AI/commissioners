@@ -2,10 +2,13 @@
 
 Configurable Coworld commissioner whose behavior is packaged in the container image.
 
-The runnable does not read `league.commissioner_config` for behavior. That field is a platform wire artifact and may
-contain legacy data while Coworlds roll over to container commissioners. Configs are authored in the readable
-shape below, copied into the image, and selected by the image's `RULESET_STRATEGY_CONFIG_NAME` or
-`RULESET_STRATEGY_CONFIG_PATH` environment variables.
+The runnable gets its active scheduling, seating, and transition behavior from image YAML, not from
+`league.commissioner_config`. That field is mostly a platform wire artifact and may contain legacy data while Coworlds
+roll over to container commissioners. During league migration, the runnable may read
+`division_roles`/`division_ladder.legacy_migrations` from `league.commissioner_config` to move memberships out of old
+topology tiers without baking those display names into the image. Configs are authored in the readable shape below,
+copied into the image, and selected by the image's `RULESET_STRATEGY_CONFIG_NAME` or `RULESET_STRATEGY_CONFIG_PATH`
+environment variables.
 
 The shared Dockerfile bundles configs from `configs/` and defaults to `configs/default.yaml`. Build the default baseline
 image with:

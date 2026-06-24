@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from math import ceil
 from typing import Any
@@ -44,6 +45,8 @@ RANK_EPISODE_EWMA_SCORING_MECHANICS = (
 )
 AMONG_THEM_SCORE_KIND = MEAN_ROUND_SCORE_KIND
 AMONG_THEM_SCORING_MECHANICS = MEAN_SCORE_EWMA_SCORING_MECHANICS
+QUALIFIER_DIVISION_ROLES = ("qualifier", "qualifiers")
+COMPETITION_ENTRY_DIVISION_ROLES = ("entry", "default", "competition")
 
 
 def select_division(
@@ -67,8 +70,11 @@ def select_qualifier_division(
     commissioner_config: dict[str, Any] | None,
     divisions: list[DivisionSnapshot],
 ) -> DivisionSnapshot | None:
-    from commissioners.common.models import DIVISION_TYPE_STAGING
     config = commissioner_config or {}
+    division = select_division_by_role(config, divisions, roles=QUALIFIER_DIVISION_ROLES)
+    if division is not None or has_division_role_config(config, QUALIFIER_DIVISION_ROLES):
+        return division
+
     qualifiers_division_name = config.get("qualifiers_division_name")
     if not qualifiers_division_name:
         return None
@@ -86,12 +92,98 @@ def select_competition_entry_division(
 ) -> DivisionSnapshot | None:
     from commissioners.common.models import DIVISION_TYPE_COMPETITION
     config = commissioner_config or {}
+    division = select_division_by_role(config, divisions, roles=COMPETITION_ENTRY_DIVISION_ROLES)
+    if division is not None or has_division_role_config(config, COMPETITION_ENTRY_DIVISION_ROLES):
+        return division
+
     return select_division(
         divisions,
         division_name=config.get("default_division_name"),
         division_type=DIVISION_TYPE_COMPETITION,
         fallback_to_lowest=True,
     )
+
+
+def select_division_by_role(
+    commissioner_config: Mapping[str, Any] | None,
+    divisions: Sequence[DivisionSnapshot],
+    *,
+    roles: Sequence[str],
+) -> DivisionSnapshot | None:
+    config = commissioner_config or {}
+    return next(
+        (division for division in divisions if division_matches_any_role(division, config, roles)),
+        None,
+    )
+
+
+def has_division_role_config(commissioner_config: Mapping[str, Any] | None, roles: Sequence[str]) -> bool:
+    config = commissioner_config or {}
+    return any(_division_role_selector(config, role) is not None for role in roles)
+
+
+def division_matches_any_role(
+    division: DivisionSnapshot,
+    commissioner_config: Mapping[str, Any],
+    roles: Sequence[str],
+) -> bool:
+    return any(
+        division_matches_selector(division, _division_role_selector(commissioner_config, role)) for role in roles
+    )
+
+
+def _division_role_selector(config: Mapping[str, Any], role: str) -> Any:
+    division_roles = config.get("division_roles")
+    if isinstance(division_roles, Mapping) and role in division_roles:
+        return division_roles[role]
+
+    division_ladder = config.get("division_ladder")
+    ladder_levels: Any = None
+    if isinstance(division_ladder, Mapping):
+        ladder_levels = division_ladder.get("levels")
+    elif isinstance(division_ladder, Sequence) and not isinstance(division_ladder, str):
+        ladder_levels = division_ladder
+    if isinstance(ladder_levels, Sequence) and not isinstance(ladder_levels, str):
+        for level in ladder_levels:
+            if isinstance(level, Mapping) and level.get("role") == role:
+                return level
+    return None
+
+
+def division_matches_selector(division: DivisionSnapshot, selector: Any) -> bool:
+    if selector is None:
+        return False
+    if isinstance(selector, str):
+        return str(division.id) == selector
+    if not isinstance(selector, Mapping):
+        return False
+
+    matched = False
+    division_id = selector.get("division_id", selector.get("id"))
+    if division_id is not None:
+        matched = True
+        if str(division.id) != str(division_id):
+            return False
+
+    division_name = selector.get("division_name", selector.get("name"))
+    if division_name is not None:
+        matched = True
+        if division.name != division_name:
+            return False
+
+    division_type = selector.get("division_type", selector.get("type"))
+    if division_type is not None:
+        matched = True
+        if division.type != division_type:
+            return False
+
+    division_level = selector.get("division_level", selector.get("level"))
+    if division_level is not None:
+        matched = True
+        if division.level != division_level:
+            return False
+
+    return matched
 
 
 def division_entrants(
