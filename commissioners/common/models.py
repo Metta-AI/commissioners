@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from enum import Enum, StrEnum
 from os import getenv
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
@@ -155,6 +155,13 @@ class RoundPolicyScore(BaseModel):
     policy_version_id: UUID
     player_id: PlayerId | None = None
     score: float
+    scores: dict[str, float] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def include_primary_score(self) -> "RoundPolicyScore":
+        if "score" not in self.scores:
+            self.scores = {"score": self.score, **self.scores}
+        return self
 
 
 class EpisodeResult(BaseModel):
@@ -392,6 +399,123 @@ class DivisionLeaderboardSnapshot(BaseModel):
     rounds_played: int
     policy_version_ids: set[UUID] = Field(default_factory=set)
     recent_rounds: list[LeaderboardRecentRoundPublic] | None = None
+
+
+LeaderboardValue = str | int | float | bool | None
+
+
+class DivisionLeaderboardAxisSnapshot(BaseModel):
+    key: str
+    label: str | None = None
+    value_type: Literal["number", "integer", "string", "boolean"] = "number"
+    sort: Literal["asc", "desc"] | None = None
+
+
+class DivisionLeaderboardRowSnapshot(BaseModel):
+    subject_type: str = "player"
+    subject_id: str
+    subject_name: str | None = None
+    values: dict[str, LeaderboardValue] = Field(default_factory=dict)
+    policy_version_ids: set[UUID] = Field(default_factory=set)
+    recent_rounds: list[LeaderboardRecentRoundPublic] | None = None
+
+
+class DivisionLeaderboardViewSnapshot(BaseModel):
+    key: str = "score"
+    title: str | None = None
+    description: str | None = None
+    axes: list[DivisionLeaderboardAxisSnapshot] = Field(default_factory=list)
+    rows: list[DivisionLeaderboardRowSnapshot] = Field(default_factory=list)
+
+
+class DivisionLeaderboardTableSnapshot(BaseModel):
+    # TODO: delete compatibility model after callers stop reading table-shaped leaderboards.
+    id: str = "score"
+    label: str = "Score"
+    description: str | None = None
+    score_label: str = "Score"
+    entries: list[DivisionLeaderboardSnapshot] = Field(default_factory=list)
+
+
+class DivisionLeaderboardsSnapshot(BaseModel):
+    default_view_key: str = "score"
+    views: list[DivisionLeaderboardViewSnapshot] = Field(default_factory=list)
+
+    def default_view(self) -> DivisionLeaderboardViewSnapshot:
+        if not self.views:
+            return DivisionLeaderboardViewSnapshot(key=self.default_view_key)
+        return next((view for view in self.views if view.key == self.default_view_key), self.views[0])
+
+    def legacy_entries(self) -> list[DivisionLeaderboardSnapshot]:
+        # TODO: delete compatibility shim after platform clients read generic leaderboard views.
+        view = self.default_view()
+        score_axis_key = _legacy_score_axis_key(view)
+        return [
+            _legacy_entry_from_row(row, rank, score_axis_key)
+            for rank, row in enumerate(view.rows, start=1)
+        ]
+
+    @property
+    def primary_table_id(self) -> str:
+        # TODO: delete compatibility shim after callers stop using table terminology.
+        return self.default_view_key
+
+    @property
+    def tables(self) -> list[DivisionLeaderboardTableSnapshot]:
+        # TODO: delete compatibility shim after callers stop using table terminology.
+        return [_table_from_view(view) for view in self.views]
+
+    def primary_table(self) -> DivisionLeaderboardTableSnapshot:
+        # TODO: delete compatibility shim after callers stop using table terminology.
+        return _table_from_view(self.default_view())
+
+
+def _legacy_score_axis_key(view: DivisionLeaderboardViewSnapshot) -> str:
+    for axis in view.axes:
+        if axis.key != "rank" and axis.sort == "desc" and axis.value_type in {"number", "integer"}:
+            return axis.key
+    for axis in view.axes:
+        if axis.key != "rank" and axis.value_type in {"number", "integer"}:
+            return axis.key
+    return "score"
+
+
+def _legacy_entry_from_row(
+    row: DivisionLeaderboardRowSnapshot,
+    rank: int,
+    score_axis_key: str,
+) -> DivisionLeaderboardSnapshot:
+    score = row.values.get(score_axis_key)
+    row_rank = row.values.get("rank", rank)
+    rounds_played = row.values.get("rounds_played", 0)
+    return DivisionLeaderboardSnapshot(
+        player_id=row.subject_id,
+        player_name=row.subject_name,
+        rank=int(row_rank) if isinstance(row_rank, (int, float)) else rank,
+        score=float(score) if isinstance(score, (int, float)) else 0.0,
+        rounds_played=int(rounds_played) if isinstance(rounds_played, (int, float)) else 0,
+        policy_version_ids=row.policy_version_ids,
+        recent_rounds=row.recent_rounds,
+    )
+
+
+def _table_from_view(view: DivisionLeaderboardViewSnapshot) -> DivisionLeaderboardTableSnapshot:
+    score_axis_key = _legacy_score_axis_key(view)
+    score_axis = next((axis for axis in view.axes if axis.key == score_axis_key), None)
+    return DivisionLeaderboardTableSnapshot(
+        id=view.key,
+        label=view.title or view.key,
+        description=view.description,
+        score_label=(score_axis.label if score_axis is not None and score_axis.label is not None else score_axis_key),
+        entries=[
+            _legacy_entry_from_row(row, rank, score_axis_key)
+            for rank, row in enumerate(view.rows, start=1)
+        ],
+    )
+
+
+# TODO: delete compatibility alias after callers stop referring to leaderboard tables.
+DivisionLeaderboardTablesSnapshot = DivisionLeaderboardsSnapshot
 
 
 class _LeaderboardAgg(BaseModel):

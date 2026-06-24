@@ -312,19 +312,19 @@ def test_default_commissioner_round_robin_generation_and_ranking() -> None:
             EpisodeResult(
                 episode_request_id=uuid4(),
                 scores=[
-                    RoundPolicyScore(policy_version_id=policy_version_ids[0], score=4.0),
-                    RoundPolicyScore(policy_version_id=policy_version_ids[1], score=2.0),
-                    RoundPolicyScore(policy_version_id=policy_version_ids[2], score=6.0),
-                    RoundPolicyScore(policy_version_id=policy_version_ids[0], score=8.0),
+                    RoundPolicyScore(policy_version_id=policy_version_ids[0], score=4.0, scores={"territory": 1.0}),
+                    RoundPolicyScore(policy_version_id=policy_version_ids[1], score=2.0, scores={"territory": 2.0}),
+                    RoundPolicyScore(policy_version_id=policy_version_ids[2], score=6.0, scores={"territory": 3.0}),
+                    RoundPolicyScore(policy_version_id=policy_version_ids[0], score=8.0, scores={"territory": 5.0}),
                 ],
             ),
             EpisodeResult(
                 episode_request_id=uuid4(),
                 scores=[
-                    RoundPolicyScore(policy_version_id=policy_version_ids[1], score=10.0),
-                    RoundPolicyScore(policy_version_id=policy_version_ids[2], score=0.0),
-                    RoundPolicyScore(policy_version_id=policy_version_ids[0], score=6.0),
-                    RoundPolicyScore(policy_version_id=policy_version_ids[1], score=4.0),
+                    RoundPolicyScore(policy_version_id=policy_version_ids[1], score=10.0, scores={"territory": 4.0}),
+                    RoundPolicyScore(policy_version_id=policy_version_ids[2], score=0.0, scores={"territory": 1.0}),
+                    RoundPolicyScore(policy_version_id=policy_version_ids[0], score=6.0, scores={"territory": 2.0}),
+                    RoundPolicyScore(policy_version_id=policy_version_ids[1], score=4.0, scores={"territory": 6.0}),
                 ],
             ),
         ],
@@ -337,6 +337,7 @@ def test_default_commissioner_round_robin_generation_and_ranking() -> None:
         policy_version_ids[2],
     ]
     assert [ranking.score for ranking in rankings] == pytest.approx([6.0, 16.0 / 3.0, 3.0])
+    assert rankings[0].result_metadata["scores"] == pytest.approx({"score": 6.0, "territory": 8.0 / 3.0})
 
 
 def test_ruleset_strategy_rank_round_score_uses_per_episode_placement() -> None:
@@ -1660,6 +1661,108 @@ def test_ruleset_strategy_scoring_configures_leaderboard_ewma_halflife() -> None
     )
 
     assert response.rankings[0].score == pytest.approx(8.0)
+
+
+def test_ruleset_strategy_scoring_configures_multiple_leaderboard_views() -> None:
+    league_id = uuid4()
+    division_id = uuid4()
+    recent_round_id = uuid4()
+    old_round_id = uuid4()
+    player_a_policy_id = uuid4()
+    player_b_policy_id = uuid4()
+    commissioner = RulesetStrategyCommissioner(
+        {
+            "scoring": {
+                "round_score": "mean",
+                "leaderboards": [
+                    {
+                        "key": "score_all",
+                        "title": "Score",
+                        "axes": [
+                            {"key": "rank", "label": "Rank", "value_type": "integer", "sort": "asc"},
+                            {"key": "score", "label": "Score", "value_type": "number", "sort": "desc"},
+                            {"key": "rounds_played", "label": "Rounds Played", "value_type": "integer"},
+                        ],
+                    },
+                    {
+                        "key": "winrate_24h",
+                        "title": "Winrate 24h",
+                        "window_hours": 24,
+                        "default": True,
+                        "axes": [
+                            {"key": "rank", "label": "Rank", "value_type": "integer", "sort": "asc"},
+                            {"key": "winrate", "label": "Winrate", "value_type": "number", "sort": "desc"},
+                            {"key": "rounds_played", "label": "Rounds Played", "value_type": "integer"},
+                        ],
+                    },
+                ],
+            },
+            "divisions": {"competition": {"match": {"type": "competition"}, "entrants": "champions"}},
+        }
+    )
+
+    response = rank_division_for_request(
+        commissioner,
+        RankDivisionRequest(
+            league=LeagueInfo(id=league_id),
+            division=DivisionInfo(id=division_id, name="Competition", level=1),
+            completed_rounds=[
+                RoundInfo(
+                    id=recent_round_id,
+                    public_id="round_recent",
+                    division_id=division_id,
+                    round_number=2,
+                    status="completed",
+                    completed_at="2026-06-23T00:00:00+00:00",
+                ),
+                RoundInfo(
+                    id=old_round_id,
+                    public_id="round_old",
+                    division_id=division_id,
+                    round_number=1,
+                    status="completed",
+                    completed_at="2026-06-21T00:00:00+00:00",
+                ),
+            ],
+            recent_rounds=[],
+            round_results=[
+                LeaderboardRoundResultInfo(
+                    round_id=recent_round_id,
+                    policy_version_id=player_a_policy_id,
+                    player_id="player-a",
+                    player_name="Alice",
+                    rank=2,
+                    score=10.0,
+                    result_metadata={"score_kind": MEAN_ROUND_SCORE_KIND, "scores": {"score": 10.0, "winrate": 0.2}},
+                ),
+                LeaderboardRoundResultInfo(
+                    round_id=recent_round_id,
+                    policy_version_id=player_b_policy_id,
+                    player_id="player-b",
+                    player_name="Bob",
+                    rank=1,
+                    score=8.0,
+                    result_metadata={"score_kind": MEAN_ROUND_SCORE_KIND, "scores": {"score": 8.0, "winrate": 0.9}},
+                ),
+                LeaderboardRoundResultInfo(
+                    round_id=old_round_id,
+                    policy_version_id=player_a_policy_id,
+                    player_id="player-a",
+                    player_name="Alice",
+                    rank=1,
+                    score=50.0,
+                    result_metadata={"score_kind": MEAN_ROUND_SCORE_KIND, "scores": {"score": 50.0, "winrate": 1.0}},
+                ),
+            ],
+        ),
+    )
+
+    assert response.default_view_key == "winrate_24h"
+    assert [view.key for view in response.views] == ["score_all", "winrate_24h"]
+    assert response.views[0].rows[0].subject_id == "player-a"
+    assert response.views[1].rows[0].subject_id == "player-b"
+    assert response.views[1].rows[0].values["winrate"] == pytest.approx(0.9)
+    assert response.rankings[0].player_id == "player-b"
 
 
 def test_baseline_round_start_uses_is_champion_for_competition_entries() -> None:

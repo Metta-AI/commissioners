@@ -32,7 +32,7 @@ from commissioners.common.protocol import (
     DescribeDivisionResponse,
     DivisionDescription as CommissionerDivisionDescription,
     DivisionConfig as CommissionerDivisionConfig,
-    DivisionLeaderboardEntry as CommissionerDivisionLeaderboardEntry,
+    DivisionLeaderboardView as CommissionerDivisionLeaderboardView,
 )
 from commissioners.common.protocol import (
     MembershipChange as CommissionerMembershipChange,
@@ -312,8 +312,8 @@ def _protocol_round_spec(spec: RoundSpec) -> CommissionerRoundSpec:
     return CommissionerRoundSpec.model_validate(spec.model_dump(mode="json"))
 
 
-def _protocol_leaderboard_entry(entry: CommissionerDivisionLeaderboardEntry) -> CommissionerDivisionLeaderboardEntry:
-    return CommissionerDivisionLeaderboardEntry.model_validate(entry.model_dump(mode="json"))
+def _protocol_leaderboard_view(view: Any) -> CommissionerDivisionLeaderboardView:
+    return CommissionerDivisionLeaderboardView.model_validate(view.model_dump(mode="json"))
 
 
 def _protocol_division_description(
@@ -352,6 +352,7 @@ def complete_round_for_round_start(
                     policy_version_id=score.policy_version_id,
                     player_id=score.player_id,
                     score=score.score,
+                    scores=score.scores,
                 )
                 for score in result.scores
             ],
@@ -516,7 +517,7 @@ def rank_division_for_request(
     commissioner: Commissioner,
     request: RankDivisionRequest,
 ) -> RankDivisionResponse:
-    rankings = commissioner.rank_division(
+    leaderboards = commissioner.rank_division_leaderboards(
         DivisionLeaderboardContext(
             league=LeagueSnapshot(
                 id=request.league.id,
@@ -546,7 +547,10 @@ def rank_division_for_request(
             ],
         )
     )
-    return RankDivisionResponse(rankings=[_protocol_leaderboard_entry(ranking) for ranking in rankings])
+    return RankDivisionResponse(
+        default_view_key=leaderboards.default_view_key,
+        views=[_protocol_leaderboard_view(view) for view in leaderboards.views],
+    )
 
 
 def describe_division_for_request(
