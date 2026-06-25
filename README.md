@@ -1,5 +1,10 @@
 # commissioners
 
+> **Archived:** This repository has moved to
+> [`Metta-AI/coworld-tools/commissioners`](https://github.com/Metta-AI/coworld-tools/tree/main/commissioners). This
+> repository remains available read-only for existing clones, links, branches, and tags. Make new changes in
+> `coworld-tools/commissioners/`.
+
 Commissioner implementations for **coworlds** - containers and tooling that orchestrate tournament rounds, schedule episodes, carry round state, and return scoring or graduation decisions to the platform.
 
 > **Status:** canonical Coworld role repo. The config-driven commissioner is the active runnable container with `/healthz` and `/round` endpoints. The coworld `commissioner` role already has a protocol in metta; see [`docs/COMMISSIONER_DESIGN.md`](docs/COMMISSIONER_DESIGN.md) for pointers and repo conventions.
